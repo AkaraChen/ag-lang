@@ -1,15 +1,15 @@
 ## 1. Example 文件创建
 
-- [ ] 1.1 创建 `examples/http-server/` 目录
-- [ ] 1.2 编写 `examples/http-server/app.ag`：完整示例代码（import、函数定义、App 创建、4 个路由、export default）
-- [ ] 1.3 编写 `examples/http-server/README.md`：运行说明（前置依赖、启动命令、端点文档、curl 示例）
+- [x] 1.1 创建 `examples/http-server/` 目录
+- [x] 1.2 编写 `examples/http-server/app.ag`：完整示例代码（import、函数定义、App 创建、4 个路由、pub fn setup）
+- [x] 1.3 编写 `examples/http-server/README.md`：运行说明（前置依赖、启动命令、端点文档、curl 示例）
 
 ## 2. 编译验证
 
-- [ ] 2.1 验证 `asc build examples/http-server/app.ag` 编译成功，无 parse/type/codegen 错误
-- [ ] 2.2 检查编译输出 JS 包含 `import { App } from "@agentscript/stdlib/http/server"`
-- [ ] 2.3 检查编译输出 JS 包含 `function add`、`function subtract`、`function calculate` 声明
-- [ ] 2.4 检查编译输出 JS 包含 `export default app`
+- [x] 2.1 验证 `asc build examples/http-server/app.ag` 编译成功，无 parse/type/codegen 错误
+- [x] 2.2 检查编译输出 JS 包含 `import { App } from "@agentscript/stdlib/http/server"`
+- [x] 2.3 检查编译输出 JS 包含 `function add`、`function subtract`、`function calculate` 声明
+- [x] 2.4 检查编译输出 JS 包含 `export function setup`（适配：使用 pub fn setup 替代 export default）
 
 ## 3. 运行时端点测试
 

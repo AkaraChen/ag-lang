@@ -624,6 +624,10 @@ impl Checker {
             Expr::Arrow(arrow) => {
                 let parent = std::mem::replace(&mut self.scope, Scope::new());
                 self.scope = Scope::child(parent);
+                let prev_async = self.in_async;
+                if arrow.is_async {
+                    self.in_async = true;
+                }
                 let param_types: Vec<Type> = arrow
                     .params
                     .iter()
@@ -647,6 +651,7 @@ impl Checker {
                     ArrowBody::Expr(e) => self.check_expr(e),
                     ArrowBody::Block(b) => self.check_block(b),
                 };
+                self.in_async = prev_async;
                 let child = std::mem::replace(&mut self.scope, Scope::new());
                 self.scope = *child.parent.unwrap();
                 Type::Function(param_types, Box::new(ret))

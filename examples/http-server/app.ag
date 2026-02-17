@@ -1,0 +1,68 @@
+import { createApp, Context } from "std:http/server"
+
+// --- Functions: arithmetic operations, if/else ---
+
+fn add(a: num, b: num) -> num {
+    a + b
+}
+
+fn subtract(a: num, b: num) -> num {
+    a - b
+}
+
+fn calculate(op: str, a: num, b: num) -> num {
+    if op == "add" {
+        add(a, b)
+    } else if op == "subtract" {
+        subtract(a, b)
+    } else if op == "multiply" {
+        a * b
+    } else if op == "divide" {
+        if b == 0 { 0 } else { a / b }
+    } else {
+        0
+    }
+}
+
+// --- App setup: routes, handlers, JSON, async/await ---
+
+pub fn setup() -> App {
+    let app = createApp()
+
+    // GET / — object literal, array literal
+    app.get("/", fn(c: Context) -> Response {
+        c.json({
+            name: "AgentScript Example Server",
+            version: "0.1.0",
+            endpoints: ["/", "/echo", "/calc", "/greet/:name"]
+        })
+    })
+
+    // POST /echo — async handler, JSON body parsing
+    app.post("/echo", async fn(c: Context) -> Response {
+        let body = await c.req.json()
+        c.json(body)
+    })
+
+    // POST /calc — function calls, field access
+    app.post("/calc", async fn(c: Context) -> Response {
+        let body = await c.req.json()
+        let result = calculate(body.op, body.a, body.b)
+        c.json({
+            op: body.op,
+            a: body.a,
+            b: body.b,
+            result: result
+        })
+    })
+
+    // GET /greet/:name — path parameters, string concatenation
+    app.get("/greet/:name", fn(c: Context) -> Response {
+        let name = c.req.param("name")
+        c.json({
+            message: "Hello, " + name + "!"
+        })
+    })
+
+    app
+}

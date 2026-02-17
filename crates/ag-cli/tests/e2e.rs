@@ -644,3 +644,45 @@ fn main() {
     assert_eq!(code, 0);
     assert!(js.contains("async ()=>{"));
 }
+
+#[test]
+fn build_example_http_server() {
+    let example_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples/http-server/app.ag");
+
+    let output = tempfile::NamedTempFile::new().unwrap();
+    let result = asc_binary()
+        .args([
+            "build",
+            example_path.to_str().unwrap(),
+            "-o",
+            output.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let code = result.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert_eq!(code, 0, "example compilation failed: {}", stderr);
+
+    let js = std::fs::read_to_string(output.path()).unwrap();
+    // Check correct imports
+    assert!(js.contains(r#"@agentscript/stdlib/http/server"#));
+    // Check functions exist
+    assert!(js.contains("function add("));
+    assert!(js.contains("function subtract("));
+    assert!(js.contains("function calculate("));
+    assert!(js.contains("export function setup("));
+    // Check routes
+    assert!(js.contains(r#"app.get("/"#));
+    assert!(js.contains(r#"app.post("/echo"#));
+    assert!(js.contains(r#"app.post("/calc"#));
+    assert!(js.contains(r#"app.get("/greet/:name"#));
+    // Check async handlers
+    assert!(js.contains("async (c)=>{"));
+    assert!(js.contains("await c.req.json()"));
+}
