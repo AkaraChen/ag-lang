@@ -1,0 +1,14 @@
+// std:log — Logging (Layer B: AG wrappers)
+// Runtime: import { info, warn, error, debug } from "@agentscript/stdlib/log"
+
+@js("@agentscript/stdlib/log")
+extern fn info(...args: any)
+
+@js("@agentscript/stdlib/log")
+extern fn warn(...args: any)
+
+@js("@agentscript/stdlib/log", name = "error")
+extern fn log_error(...args: any)
+
+@js("@agentscript/stdlib/log")
+extern fn debug(...args: any)

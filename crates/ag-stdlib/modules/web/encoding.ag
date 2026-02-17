@@ -1,0 +1,12 @@
+// std:web/encoding — Encoding API (Layer A: extern declarations, zero runtime)
+
+extern struct TextEncoder {
+    fn encode(input: str) -> any
+}
+
+extern struct TextDecoder {
+    fn decode(input: any) -> str
+}
+
+extern fn atob(encoded: str) -> str
+extern fn btoa(data: str) -> str

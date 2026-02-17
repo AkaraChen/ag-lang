@@ -1,0 +1,5 @@
+// std:web/streams — Streams API (Layer A: extern declarations, zero runtime)
+
+extern type ReadableStream
+extern type WritableStream
+extern type TransformStream

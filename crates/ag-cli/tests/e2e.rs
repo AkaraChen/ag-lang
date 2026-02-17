@@ -361,3 +361,183 @@ Answer the question.
     assert!(js.contains("string"));
     assert!(js.contains("number"));
 }
+
+// ── Extern / stdlib / JS interop e2e tests ──
+
+#[test]
+fn build_extern_fn_with_js_annotation() {
+    let (js, _, code) = build_ag(r#"
+@js("node:fs/promises")
+extern fn readFile(path: str) -> Promise<str>
+
+async fn main() {
+    let content = await readFile("test.txt")
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains(r#"import { readFile } from "node:fs/promises""#));
+    assert!(js.contains("await readFile"));
+}
+
+#[test]
+fn build_extern_fn_erased() {
+    let (js, _, code) = build_ag(r#"
+extern fn console_log(msg: str)
+"#);
+    assert_eq!(code, 0);
+    // extern fn should not generate any JS function definition
+    assert!(!js.contains("function console_log"));
+}
+
+#[test]
+fn build_extern_struct_erased() {
+    let (js, _, code) = build_ag(r#"
+extern struct MyClass {
+    name: str,
+    fn hello() -> str
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(js.trim().is_empty());
+}
+
+#[test]
+fn build_extern_type_erased() {
+    let (js, _, code) = build_ag(r#"
+extern type Headers
+"#);
+    assert_eq!(code, 0);
+    assert!(js.trim().is_empty());
+}
+
+#[test]
+fn build_js_import_merged() {
+    let (js, _, code) = build_ag(r#"
+@js("node:fs/promises")
+extern fn readFile(path: str) -> Promise<str>
+
+@js("node:fs/promises")
+extern fn writeFile(path: str, data: str) -> Promise<nil>
+
+async fn main() {
+    let data = await readFile("in.txt")
+    await writeFile("out.txt", data)
+}
+"#);
+    assert_eq!(code, 0);
+    // Both should be merged into a single import
+    assert!(js.contains("readFile"));
+    assert!(js.contains("writeFile"));
+    assert!(js.contains(r#"from "node:fs/promises""#));
+}
+
+#[test]
+fn build_js_import_aliased() {
+    let (js, _, code) = build_ag(r#"
+@js("my-lib", name = "doWork")
+extern fn do_work(input: str) -> str
+
+fn main() {
+    let result = do_work("test")
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains("doWork"));
+    assert!(js.contains(r#"from "my-lib""#));
+}
+
+#[test]
+fn build_unreferenced_js_extern_no_import() {
+    let (js, _, code) = build_ag(r#"
+@js("some-module")
+extern fn unused_fn(x: str) -> str
+
+let x: int = 42
+"#);
+    assert_eq!(code, 0);
+    // unused extern should not generate import
+    assert!(!js.contains("some-module"));
+}
+
+#[test]
+fn build_extern_fn_no_js_no_import() {
+    let (js, _, code) = build_ag(r#"
+extern fn fetch(url: str) -> Promise<any>
+
+async fn main() {
+    let resp = await fetch("https://example.com")
+}
+"#);
+    assert_eq!(code, 0);
+    // No @js annotation = global API, no import
+    assert!(!js.contains("import"));
+    assert!(js.contains("fetch"));
+}
+
+#[test]
+fn build_promise_type_and_async_await() {
+    let (js, _, code) = build_ag(r#"
+extern fn fetch(url: str) -> Promise<any>
+
+async fn load_data(url: str) -> any {
+    let resp = await fetch(url)
+    resp
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains("async function load_data"));
+    assert!(js.contains("await fetch"));
+}
+
+#[test]
+fn check_await_outside_async_error() {
+    let (stderr, code) = check_ag(r#"
+extern fn fetch(url: str) -> Promise<any>
+
+fn main() {
+    let resp = await fetch("url")
+}
+"#);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("await") && stderr.contains("async"));
+}
+
+#[test]
+fn build_std_web_fetch_import() {
+    let (js, _, code) = build_ag(r#"
+import { fetch, Response } from "std:web/fetch"
+
+async fn load(url: str) -> any {
+    let resp = await fetch(url)
+    resp
+}
+"#);
+    assert_eq!(code, 0);
+    // web/fetch is Layer A (global API), no import in JS output
+    assert!(!js.contains(r#"from "std:"#));
+    assert!(js.contains("fetch"));
+}
+
+#[test]
+fn build_std_log_import() {
+    let (js, _, code) = build_ag(r#"
+import { info } from "std:log"
+
+fn main() {
+    info("hello")
+}
+"#);
+    assert_eq!(code, 0);
+    // Layer B: should generate @agentscript/stdlib import
+    assert!(js.contains(r#"@agentscript/stdlib/log"#));
+    assert!(js.contains("info"));
+}
+
+#[test]
+fn check_unknown_std_module_error() {
+    let (stderr, code) = check_ag(r#"
+import { foo } from "std:nonexistent"
+"#);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("unknown") || stderr.contains("nonexistent"));
+}

@@ -133,7 +133,8 @@ impl<'a> Parser<'a> {
                 | TokenKind::If
                 | TokenKind::Match
                 | TokenKind::Ret
-                | TokenKind::At => break,
+                | TokenKind::At
+                | TokenKind::Extern => break,
                 _ => {
                     self.advance();
                 }
@@ -175,7 +176,18 @@ impl<'a> Parser<'a> {
             TokenKind::Struct => self.parse_struct_decl().map(Item::StructDecl),
             TokenKind::Enum => self.parse_enum_decl().map(Item::EnumDecl),
             TokenKind::Type => self.parse_type_alias().map(Item::TypeAlias),
-            TokenKind::At => self.parse_dsl_block().map(Item::DslBlock),
+            TokenKind::Extern => self.parse_extern_item(None),
+            TokenKind::At => {
+                // Check if this is @js annotation (followed by "js" ident)
+                if self.pos + 1 < self.tokens.len() {
+                    if let TokenKind::Ident(ref name) = self.tokens[self.pos + 1].kind {
+                        if name == "js" {
+                            return self.parse_js_annotated_extern();
+                        }
+                    }
+                }
+                self.parse_dsl_block().map(Item::DslBlock)
+            }
             // Control flow statements at top level — wrap as ExprStmt containing block-level constructs
             TokenKind::For | TokenKind::While | TokenKind::Try | TokenKind::Ret => {
                 let span = self.current_span();
@@ -382,6 +394,7 @@ impl<'a> Parser<'a> {
                 name,
                 ty,
                 default,
+                is_variadic: false,
                 span: Span::new(start.start, end.end),
             });
 
@@ -718,6 +731,224 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // ── Extern declarations ──────────────────────────────
+
+    fn parse_js_annotated_extern(&mut self) -> Option<Item> {
+        let annotation = self.parse_js_annotation()?;
+        if !matches!(self.peek(), TokenKind::Extern) {
+            self.error("@js annotation can only be applied to extern declarations");
+            return None;
+        }
+        self.parse_extern_item(Some(annotation))
+    }
+
+    fn parse_js_annotation(&mut self) -> Option<JsAnnotation> {
+        let start = self.current_span();
+        self.advance(); // consume '@'
+        // Expect 'js' identifier
+        let name = self.expect_ident()?;
+        if name != "js" {
+            self.error("expected `js` after `@`");
+            return None;
+        }
+        self.expect(&TokenKind::LParen)?;
+        let module = self.parse_string_literal()?;
+        let mut js_name = None;
+        if matches!(self.peek(), TokenKind::Comma) {
+            self.advance();
+            // Expect name = "jsName"
+            let key = self.expect_ident()?;
+            if key != "name" {
+                self.error("expected `name` in @js annotation");
+                return None;
+            }
+            self.expect(&TokenKind::Eq)?;
+            js_name = Some(self.parse_string_literal()?);
+        }
+        self.expect(&TokenKind::RParen)?;
+        let end = self.current_span();
+        Some(JsAnnotation {
+            module: Some(module),
+            js_name,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    fn parse_extern_item(&mut self, js_annotation: Option<JsAnnotation>) -> Option<Item> {
+        let start = self.current_span();
+        self.advance(); // consume 'extern'
+        match self.peek() {
+            TokenKind::Fn => self.parse_extern_fn_decl(start, js_annotation).map(Item::ExternFnDecl),
+            TokenKind::Struct => self.parse_extern_struct_decl(start, js_annotation).map(Item::ExternStructDecl),
+            TokenKind::Type => self.parse_extern_type_decl(start, js_annotation).map(Item::ExternTypeDecl),
+            _ => {
+                self.error("expected `fn`, `struct`, or `type` after `extern`");
+                None
+            }
+        }
+    }
+
+    fn parse_extern_fn_decl(&mut self, start: Span, js_annotation: Option<JsAnnotation>) -> Option<ExternFnDecl> {
+        self.advance(); // consume 'fn'
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LParen)?;
+        let (params, variadic) = self.parse_extern_params()?;
+        self.expect(&TokenKind::RParen)?;
+
+        let return_type = if matches!(self.peek(), TokenKind::ThinArrow) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        // Reject function body
+        if matches!(self.peek(), TokenKind::LBrace) {
+            self.error("extern functions must not have a body");
+            return None;
+        }
+
+        let end = self.current_span();
+        Some(ExternFnDecl {
+            name,
+            params,
+            return_type,
+            js_annotation,
+            variadic,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    fn parse_extern_params(&mut self) -> Option<(Vec<Param>, bool)> {
+        let mut params = Vec::new();
+        let mut variadic = false;
+        while !matches!(self.peek(), TokenKind::RParen | TokenKind::Eof) {
+            let start = self.current_span();
+            let is_variadic = if matches!(self.peek(), TokenKind::DotDotDot) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            let name = self.expect_ident()?;
+
+            let ty = if matches!(self.peek(), TokenKind::Colon) {
+                self.advance();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+
+            let default = if matches!(self.peek(), TokenKind::Eq) {
+                self.advance();
+                Some(self.parse_expr(0)?)
+            } else {
+                None
+            };
+
+            let end = self.current_span();
+            params.push(Param {
+                name,
+                ty,
+                default,
+                is_variadic,
+                span: Span::new(start.start, end.end),
+            });
+
+            if is_variadic {
+                variadic = true;
+                // Variadic must be last
+                if matches!(self.peek(), TokenKind::Comma) {
+                    self.advance();
+                    if !matches!(self.peek(), TokenKind::RParen | TokenKind::Eof) {
+                        self.error("variadic parameter must be the last parameter");
+                    }
+                }
+                break;
+            }
+
+            if matches!(self.peek(), TokenKind::Comma) {
+                self.advance();
+            }
+        }
+        Some((params, variadic))
+    }
+
+    fn parse_extern_struct_decl(&mut self, start: Span, js_annotation: Option<JsAnnotation>) -> Option<ExternStructDecl> {
+        self.advance(); // consume 'struct'
+        let name = self.expect_ident()?;
+        self.expect(&TokenKind::LBrace)?;
+
+        let mut fields = Vec::new();
+        let mut methods = Vec::new();
+
+        while !matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
+            if matches!(self.peek(), TokenKind::Fn) {
+                // Method signature
+                let mstart = self.current_span();
+                self.advance(); // consume 'fn'
+                let mname = self.expect_ident()?;
+                self.expect(&TokenKind::LParen)?;
+                let mparams = self.parse_params()?;
+                self.expect(&TokenKind::RParen)?;
+                let mret = if matches!(self.peek(), TokenKind::ThinArrow) {
+                    self.advance();
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                // Reject method body
+                if matches!(self.peek(), TokenKind::LBrace) {
+                    self.error("extern struct methods must not have a body");
+                    return None;
+                }
+                let mend = self.current_span();
+                methods.push(MethodSignature {
+                    name: mname,
+                    params: mparams,
+                    return_type: mret,
+                    span: Span::new(mstart.start, mend.end),
+                });
+            } else {
+                // Field
+                let fstart = self.current_span();
+                let fname = self.expect_ident()?;
+                self.expect(&TokenKind::Colon)?;
+                let ftype = self.parse_type()?;
+                let fend = self.current_span();
+                fields.push(Field {
+                    name: fname,
+                    ty: ftype,
+                    default: None,
+                    span: Span::new(fstart.start, fend.end),
+                });
+            }
+            if matches!(self.peek(), TokenKind::Comma) {
+                self.advance();
+            }
+        }
+        self.expect(&TokenKind::RBrace)?;
+        let end = self.current_span();
+        Some(ExternStructDecl {
+            name,
+            fields,
+            methods,
+            js_annotation,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    fn parse_extern_type_decl(&mut self, start: Span, js_annotation: Option<JsAnnotation>) -> Option<ExternTypeDecl> {
+        self.advance(); // consume 'type'
+        let name = self.expect_ident()?;
+        let end = self.current_span();
+        Some(ExternTypeDecl {
+            name,
+            js_annotation,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
     // ── Type parsing ───────────────────────────────────────
 
     fn parse_type(&mut self) -> Option<TypeExpr> {
@@ -864,10 +1095,26 @@ impl<'a> Parser<'a> {
             TokenKind::Ident(_) => {
                 let tok = self.advance().clone();
                 if let TokenKind::Ident(name) = tok.kind {
-                    Some(TypeExpr::Named(name, tok.span))
+                    // Check for Promise<T> generic syntax
+                    if name == "Promise" && matches!(self.peek(), TokenKind::Lt) {
+                        self.advance(); // consume '<'
+                        let inner = self.parse_type()?;
+                        self.expect(&TokenKind::Gt)?;
+                        let end = self.current_span();
+                        Some(TypeExpr::Promise(
+                            Box::new(inner),
+                            Span::new(tok.span.start, end.end),
+                        ))
+                    } else {
+                        Some(TypeExpr::Named(name, tok.span))
+                    }
                 } else {
                     None
                 }
+            }
+            TokenKind::Nil => {
+                let tok = self.advance().clone();
+                Some(TypeExpr::Named("nil".to_string(), tok.span))
             }
             _ => {
                 self.error("expected type");
@@ -1485,6 +1732,7 @@ impl<'a> Parser<'a> {
                 name,
                 ty,
                 default,
+                is_variadic: false,
                 span: Span::new(start.start, end.end),
             });
             if matches!(self.peek(), TokenKind::Comma) {
@@ -2092,5 +2340,128 @@ fn foo() -> int { 1 }"#,
     fn dsl_missing_body() {
         let result = parse("@prompt system\nfn foo() {}");
         assert!(!result.diagnostics.is_empty());
+    }
+
+    // ── Extern declaration tests ──
+
+    #[test]
+    fn extern_fn_simple() {
+        let m = parse_ok("extern fn fetch(url: str) -> Promise<any>");
+        assert_eq!(m.items.len(), 1);
+        if let Item::ExternFnDecl(ef) = &m.items[0] {
+            assert_eq!(ef.name, "fetch");
+            assert_eq!(ef.params.len(), 1);
+            assert_eq!(ef.params[0].name, "url");
+            assert!(!ef.variadic);
+            assert!(ef.js_annotation.is_none());
+        } else {
+            panic!("expected ExternFnDecl");
+        }
+    }
+
+    #[test]
+    fn extern_fn_no_return_type() {
+        let m = parse_ok("extern fn log(msg: str)");
+        if let Item::ExternFnDecl(ef) = &m.items[0] {
+            assert_eq!(ef.name, "log");
+            assert!(ef.return_type.is_none());
+        } else {
+            panic!("expected ExternFnDecl");
+        }
+    }
+
+    #[test]
+    fn extern_fn_variadic() {
+        let m = parse_ok("extern fn info(...args: any)");
+        if let Item::ExternFnDecl(ef) = &m.items[0] {
+            assert_eq!(ef.name, "info");
+            assert!(ef.variadic);
+            assert_eq!(ef.params.len(), 1);
+            assert_eq!(ef.params[0].name, "args");
+        } else {
+            panic!("expected ExternFnDecl");
+        }
+    }
+
+    #[test]
+    fn extern_struct() {
+        let m = parse_ok("extern struct Response {\n    status: num,\n    fn json() -> any\n}");
+        if let Item::ExternStructDecl(es) = &m.items[0] {
+            assert_eq!(es.name, "Response");
+            assert_eq!(es.fields.len(), 1);
+            assert_eq!(es.fields[0].name, "status");
+            assert_eq!(es.methods.len(), 1);
+            assert_eq!(es.methods[0].name, "json");
+        } else {
+            panic!("expected ExternStructDecl");
+        }
+    }
+
+    #[test]
+    fn extern_type_simple() {
+        let m = parse_ok("extern type Headers");
+        if let Item::ExternTypeDecl(et) = &m.items[0] {
+            assert_eq!(et.name, "Headers");
+            assert!(et.js_annotation.is_none());
+        } else {
+            panic!("expected ExternTypeDecl");
+        }
+    }
+
+    #[test]
+    fn js_annotation_module_only() {
+        let m = parse_ok("@js(\"node:fs\")\nextern fn readFile(path: str) -> Promise<str>");
+        if let Item::ExternFnDecl(ef) = &m.items[0] {
+            assert_eq!(ef.name, "readFile");
+            let ann = ef.js_annotation.as_ref().unwrap();
+            assert_eq!(ann.module, Some("node:fs".to_string()));
+            assert!(ann.js_name.is_none());
+        } else {
+            panic!("expected ExternFnDecl");
+        }
+    }
+
+    #[test]
+    fn js_annotation_with_name() {
+        let m = parse_ok("@js(\"my-lib\", name = \"doWork\")\nextern fn do_work(input: str) -> str");
+        if let Item::ExternFnDecl(ef) = &m.items[0] {
+            let ann = ef.js_annotation.as_ref().unwrap();
+            assert_eq!(ann.module, Some("my-lib".to_string()));
+            assert_eq!(ann.js_name, Some("doWork".to_string()));
+        } else {
+            panic!("expected ExternFnDecl");
+        }
+    }
+
+    #[test]
+    fn promise_type_parsing() {
+        let m = parse_ok("extern fn load(url: str) -> Promise<str>");
+        if let Item::ExternFnDecl(ef) = &m.items[0] {
+            assert!(matches!(ef.return_type.as_ref().unwrap(), TypeExpr::Promise(..)));
+        } else {
+            panic!("expected ExternFnDecl");
+        }
+    }
+
+    #[test]
+    fn promise_nested() {
+        let m = parse_ok("extern fn load() -> Promise<Promise<str>>");
+        if let Item::ExternFnDecl(ef) = &m.items[0] {
+            if let TypeExpr::Promise(inner, _) = ef.return_type.as_ref().unwrap() {
+                assert!(matches!(inner.as_ref(), TypeExpr::Promise(..)));
+            } else {
+                panic!("expected Promise type");
+            }
+        } else {
+            panic!("expected ExternFnDecl");
+        }
+    }
+
+    #[test]
+    fn extern_mixed_with_regular() {
+        let m = parse_ok("extern fn fetch(url: str) -> Promise<any>\nfn main() {\n    let x = 1\n}");
+        assert_eq!(m.items.len(), 2);
+        assert!(matches!(m.items[0], Item::ExternFnDecl(_)));
+        assert!(matches!(m.items[1], Item::FnDecl(_)));
     }
 }

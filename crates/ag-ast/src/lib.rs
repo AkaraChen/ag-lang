@@ -32,6 +32,9 @@ pub enum Item {
     VarDecl(VarDecl),
     ExprStmt(ExprStmt),
     DslBlock(DslBlock),
+    ExternFnDecl(ExternFnDecl),
+    ExternStructDecl(ExternStructDecl),
+    ExternTypeDecl(ExternTypeDecl),
 }
 
 // ── DSL Block ─────────────────────────────────────────────
@@ -312,6 +315,7 @@ pub enum TypeExpr {
     Union(Box<TypeExpr>, Box<TypeExpr>, Span),
     Function(FunctionType),
     Object(ObjectType),
+    Promise(Box<TypeExpr>, Span),
 }
 
 #[derive(Debug, Clone)]
@@ -360,6 +364,49 @@ pub struct EnumPattern {
     pub span: Span,
 }
 
+// ── Extern Declarations ────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct JsAnnotation {
+    pub module: Option<String>,
+    pub js_name: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternFnDecl {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeExpr>,
+    pub js_annotation: Option<JsAnnotation>,
+    pub variadic: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct MethodSignature {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeExpr>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternStructDecl {
+    pub name: String,
+    pub fields: Vec<Field>,
+    pub methods: Vec<MethodSignature>,
+    pub js_annotation: Option<JsAnnotation>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternTypeDecl {
+    pub name: String,
+    pub js_annotation: Option<JsAnnotation>,
+    pub span: Span,
+}
+
 // ── Declarations ───────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -394,6 +441,7 @@ pub struct Param {
     pub name: String,
     pub ty: Option<TypeExpr>,
     pub default: Option<Expr>,
+    pub is_variadic: bool,
     pub span: Span,
 }
 

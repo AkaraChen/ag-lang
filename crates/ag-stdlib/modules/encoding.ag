@@ -1,0 +1,8 @@
+// std:encoding — JSON encoding/decoding (Layer B: AG wrappers)
+// Runtime: import { jsonParse, jsonStringify } from "@agentscript/stdlib/encoding"
+
+@js("@agentscript/stdlib/encoding", name = "jsonParse")
+extern fn json_parse(text: str) -> any
+
+@js("@agentscript/stdlib/encoding", name = "jsonStringify")
+extern fn json_stringify(value: any) -> str

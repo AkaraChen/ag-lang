@@ -37,6 +37,7 @@ pub enum TokenKind {
     Underscore,
     Try,
     Catch,
+    Extern,
 
     // Literals
     Ident(String),
@@ -419,6 +420,7 @@ impl<'a> Lexer<'a> {
             "_" => TokenKind::Underscore,
             "try" => TokenKind::Try,
             "catch" => TokenKind::Catch,
+            "extern" => TokenKind::Extern,
             _ => TokenKind::Ident(text.to_string()),
         };
         Token {
@@ -1381,5 +1383,22 @@ mod tests {
         let _ = lexer.enter_dsl_raw_mode();
         assert_eq!(lexer.next_token().kind, TokenKind::DslText("  content\n  ".into()));
         assert_eq!(lexer.next_token().kind, TokenKind::DslBlockEnd);
+    }
+
+    // ── Extern keyword tests ──
+
+    #[test]
+    fn extern_keyword() {
+        assert_eq!(kinds("extern fn"), vec![TokenKind::Extern, TokenKind::Fn]);
+    }
+
+    #[test]
+    fn extern_not_ident() {
+        assert_eq!(kinds("extern"), vec![TokenKind::Extern]);
+    }
+
+    #[test]
+    fn extern_prefix_is_ident() {
+        assert_eq!(kinds("external"), vec![TokenKind::Ident("external".into())]);
     }
 }

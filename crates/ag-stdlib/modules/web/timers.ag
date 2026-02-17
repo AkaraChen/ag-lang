@@ -1,0 +1,6 @@
+// std:web/timers — Timer API (Layer A: extern declarations, zero runtime)
+
+extern fn setTimeout(callback: () -> nil, delay: int) -> int
+extern fn setInterval(callback: () -> nil, delay: int) -> int
+extern fn clearTimeout(id: int)
+extern fn clearInterval(id: int)

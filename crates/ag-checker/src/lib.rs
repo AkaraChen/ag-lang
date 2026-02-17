@@ -18,6 +18,8 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     Struct(String, Vec<(String, Type)>),
     Enum(String, Vec<(String, Vec<(String, Type)>)>),
+    Promise(Box<Type>),
+    VariadicFunction(Vec<Type>, Box<Type>), // fixed params + variadic element type as last
     Unknown,
 }
 
@@ -40,6 +42,11 @@ impl std::fmt::Display for Type {
             }
             Type::Struct(name, _) => write!(f, "{name}"),
             Type::Enum(name, _) => write!(f, "{name}"),
+            Type::Promise(inner) => write!(f, "Promise<{inner}>"),
+            Type::VariadicFunction(params, ret) => {
+                let ps: Vec<String> = params.iter().map(|p| p.to_string()).collect();
+                write!(f, "({}, ...) -> {ret}", ps.join(", "))
+            }
             Type::Unknown => write!(f, "unknown"),
         }
     }
@@ -94,6 +101,7 @@ pub struct Checker {
     scope: Scope,
     pub diagnostics: Vec<Diagnostic>,
     type_aliases: HashMap<String, Type>,
+    in_async: bool,
 }
 
 pub struct CheckResult {
@@ -114,6 +122,7 @@ impl Checker {
             scope: Scope::new(),
             diagnostics: Vec::new(),
             type_aliases: HashMap::new(),
+            in_async: false,
         }
     }
 
@@ -153,6 +162,7 @@ impl Checker {
                     && ep.iter().zip(ap).all(|(e, a)| self.type_compatible(e, a))
                     && self.type_compatible(er, ar)
             }
+            (Type::Promise(e), Type::Promise(a)) => self.type_compatible(e, a),
             // Structural subtyping for structs
             (Type::Struct(_, expected_fields), Type::Struct(_, actual_fields)) => {
                 expected_fields.iter().all(|(name, ty)| {
@@ -208,6 +218,9 @@ impl Checker {
                     .collect();
                 Type::Struct("anonymous".to_string(), fields)
             }
+            TypeExpr::Promise(inner, _) => {
+                Type::Promise(Box::new(self.resolve_type(inner)))
+            }
         }
     }
 
@@ -221,6 +234,9 @@ impl Checker {
                 Item::StructDecl(s) => self.register_struct_decl(s),
                 Item::EnumDecl(e) => self.register_enum_decl(e),
                 Item::TypeAlias(t) => self.register_type_alias(t),
+                Item::ExternFnDecl(ef) => self.register_extern_fn_decl(ef),
+                Item::ExternStructDecl(es) => self.register_extern_struct_decl(es),
+                Item::ExternTypeDecl(et) => self.register_extern_type_decl(et),
                 _ => {}
             }
         }
@@ -259,11 +275,15 @@ impl Checker {
                     .unwrap_or(Type::Any)
             })
             .collect();
-        let ret_type = f
+        let mut ret_type = f
             .return_type
             .as_ref()
             .map(|t| self.resolve_type(t))
             .unwrap_or(Type::Nil);
+        // async fn externally returns Promise<T>
+        if f.is_async {
+            ret_type = Type::Promise(Box::new(ret_type));
+        }
         self.scope.define(
             &f.name,
             Symbol {
@@ -317,11 +337,95 @@ impl Checker {
         self.type_aliases.insert(t.name.clone(), ty);
     }
 
+    fn register_extern_fn_decl(&mut self, ef: &ExternFnDecl) {
+        let param_types: Vec<Type> = ef
+            .params
+            .iter()
+            .map(|p| {
+                p.ty.as_ref()
+                    .map(|t| self.resolve_type(t))
+                    .unwrap_or(Type::Any)
+            })
+            .collect();
+        let ret_type = ef
+            .return_type
+            .as_ref()
+            .map(|t| self.resolve_type(t))
+            .unwrap_or(Type::Nil);
+        let ty = if ef.variadic {
+            Type::VariadicFunction(param_types, Box::new(ret_type))
+        } else {
+            Type::Function(param_types, Box::new(ret_type))
+        };
+        if !self.scope.define(
+            &ef.name,
+            Symbol {
+                ty,
+                mutable: false,
+            },
+        ) {
+            self.error(format!("duplicate declaration `{}`", ef.name), ef.span);
+        }
+    }
+
+    fn register_extern_struct_decl(&mut self, es: &ExternStructDecl) {
+        let fields: Vec<(String, Type)> = es
+            .fields
+            .iter()
+            .map(|f| (f.name.clone(), self.resolve_type(&f.ty)))
+            .collect();
+        // Also register methods as fields with function types
+        let mut all_fields = fields;
+        for m in &es.methods {
+            let param_types: Vec<Type> = m
+                .params
+                .iter()
+                .map(|p| {
+                    p.ty.as_ref()
+                        .map(|t| self.resolve_type(t))
+                        .unwrap_or(Type::Any)
+                })
+                .collect();
+            let ret_type = m
+                .return_type
+                .as_ref()
+                .map(|t| self.resolve_type(t))
+                .unwrap_or(Type::Nil);
+            all_fields.push((m.name.clone(), Type::Function(param_types, Box::new(ret_type))));
+        }
+        let ty = Type::Struct(es.name.clone(), all_fields);
+        if !self.scope.define(
+            &es.name,
+            Symbol {
+                ty,
+                mutable: false,
+            },
+        ) {
+            self.error(format!("duplicate declaration `{}`", es.name), es.span);
+        }
+    }
+
+    fn register_extern_type_decl(&mut self, et: &ExternTypeDecl) {
+        // Opaque type: register as a struct with no fields
+        let ty = Type::Struct(et.name.clone(), Vec::new());
+        if !self.scope.define(
+            &et.name,
+            Symbol {
+                ty,
+                mutable: false,
+            },
+        ) {
+            self.error(format!("duplicate declaration `{}`", et.name), et.span);
+        }
+    }
+
     // ── Function check ─────────────────────────────────────
 
     fn check_fn_decl(&mut self, f: &FnDecl) {
         let parent = std::mem::replace(&mut self.scope, Scope::new());
         self.scope = Scope::child(parent);
+        let prev_async = self.in_async;
+        self.in_async = f.is_async;
 
         // Check and register params
         for param in &f.params {
@@ -366,7 +470,8 @@ impl Checker {
             }
         }
 
-        // Restore scope
+        // Restore scope and async state
+        self.in_async = prev_async;
         let child = std::mem::replace(&mut self.scope, Scope::new());
         self.scope = *child.parent.unwrap();
     }
@@ -561,7 +666,23 @@ impl Checker {
                 let right = self.check_expr(&nc.right);
                 right // simplified: result is the non-null type
             }
-            Expr::Await(a) => self.check_expr(&a.expr),
+            Expr::Await(a) => {
+                if !self.in_async {
+                    self.error("await can only be used inside async functions", a.span);
+                }
+                let inner_ty = self.check_expr(&a.expr);
+                match inner_ty {
+                    Type::Promise(inner) => *inner,
+                    Type::Any | Type::Unknown => inner_ty,
+                    _ => {
+                        self.error(
+                            format!("await requires a Promise, found `{}`", inner_ty),
+                            a.span,
+                        );
+                        Type::Unknown
+                    }
+                }
+            }
             Expr::ErrorPropagate(ep) => self.check_expr(&ep.expr),
             Expr::Assign(assign) => {
                 let value_ty = self.check_expr(&assign.value);
@@ -589,14 +710,9 @@ impl Checker {
             self.check_expr(arg);
         }
 
-        if let Type::Function(param_types, ret) = &callee_ty {
-            // Count required params (those without defaults are all in param_types)
-            let min_params = param_types.len(); // simplified - we don't track defaults here
-            let max_params = param_types.len();
-
-            if call.args.len() < min_params || call.args.len() > max_params {
-                // Only report if clearly wrong (not accounting for defaults in simplified checker)
-                if call.args.len() > max_params {
+        match &callee_ty {
+            Type::Function(param_types, ret) => {
+                if call.args.len() > param_types.len() {
                     self.error(
                         format!(
                             "expected {} arguments, found {}",
@@ -606,27 +722,69 @@ impl Checker {
                         call.span,
                     );
                 }
+                for (i, (arg, param_ty)) in call.args.iter().zip(param_types).enumerate() {
+                    let arg_ty = self.check_expr(arg);
+                    if !self.type_compatible(param_ty, &arg_ty) {
+                        self.error(
+                            format!(
+                                "argument {}: expected `{}`, found `{}`",
+                                i + 1, param_ty, arg_ty
+                            ),
+                            call.span,
+                        );
+                    }
+                }
+                *ret.clone()
             }
+            Type::VariadicFunction(param_types, ret) => {
+                // Fixed params come first; last param_type is the variadic element type
+                let (fixed, variadic_ty) = if param_types.is_empty() {
+                    (param_types.as_slice(), &Type::Any)
+                } else {
+                    let (fixed, rest) = param_types.split_at(param_types.len() - 1);
+                    (fixed, &rest[0])
+                };
 
-            // Check argument types
-            for (i, (arg, param_ty)) in call.args.iter().zip(param_types).enumerate() {
-                let arg_ty = self.check_expr(arg);
-                if !self.type_compatible(param_ty, &arg_ty) {
+                // Check minimum arity (fixed params)
+                if call.args.len() < fixed.len() {
                     self.error(
                         format!(
-                            "argument {}: expected `{}`, found `{}`",
-                            i + 1,
-                            param_ty,
-                            arg_ty
+                            "expected at least {} arguments, found {}",
+                            fixed.len(),
+                            call.args.len()
                         ),
                         call.span,
                     );
                 }
-            }
 
-            *ret.clone()
-        } else {
-            Type::Any
+                for (i, arg) in call.args.iter().enumerate() {
+                    let arg_ty = self.check_expr(arg);
+                    if i < fixed.len() {
+                        if !self.type_compatible(&fixed[i], &arg_ty) {
+                            self.error(
+                                format!(
+                                    "argument {}: expected `{}`, found `{}`",
+                                    i + 1, fixed[i], arg_ty
+                                ),
+                                call.span,
+                            );
+                        }
+                    } else {
+                        // Variadic args
+                        if !self.type_compatible(variadic_ty, &arg_ty) {
+                            self.error(
+                                format!(
+                                    "argument {}: expected `{}`, found `{}`",
+                                    i + 1, variadic_ty, arg_ty
+                                ),
+                                call.span,
+                            );
+                        }
+                    }
+                }
+                *ret.clone()
+            }
+            _ => Type::Any,
         }
     }
 

@@ -1,0 +1,8 @@
+// std:fs — File system (Layer B: AG wrappers)
+// Runtime: import { readFile, writeFile } from "@agentscript/stdlib/fs"
+
+@js("@agentscript/stdlib/fs", name = "readFile")
+extern fn read_file(path: str) -> Promise<str>
+
+@js("@agentscript/stdlib/fs", name = "writeFile")
+extern fn write_file(path: str, content: str) -> Promise<nil>

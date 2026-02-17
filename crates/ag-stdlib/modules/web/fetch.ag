@@ -1,0 +1,29 @@
+// std:web/fetch — Web Fetch API (Layer A: extern declarations, zero runtime)
+
+extern type Headers
+extern type URL
+extern type URLSearchParams
+
+extern struct Request {
+    url: str,
+    method: str,
+    headers: Headers,
+    fn json() -> Promise<any>
+    fn text() -> Promise<str>
+    fn arrayBuffer() -> Promise<any>
+    fn clone() -> Request
+}
+
+extern struct Response {
+    ok: bool,
+    status: int,
+    statusText: str,
+    headers: Headers,
+    url: str,
+    fn json() -> Promise<any>
+    fn text() -> Promise<str>
+    fn arrayBuffer() -> Promise<any>
+    fn clone() -> Response
+}
+
+extern fn fetch(input: str, init: any?) -> Promise<Response>

@@ -1,0 +1,9 @@
+// std:web/crypto — Web Crypto API (Layer A: extern declarations, zero runtime)
+
+extern type SubtleCrypto
+
+extern struct Crypto {
+    subtle: SubtleCrypto,
+    fn randomUUID() -> str
+    fn getRandomValues(array: any) -> any
+}

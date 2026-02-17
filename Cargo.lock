@@ -23,6 +23,7 @@ dependencies = [
  "ag-codegen",
  "ag-lexer",
  "ag-parser",
+ "ag-stdlib",
  "tempfile",
 ]
 
@@ -70,6 +71,10 @@ dependencies = [
  "ag-ast",
  "ag-lexer",
 ]
+
+[[package]]
+name = "ag-stdlib"
+version = "0.1.0"
 
 [[package]]
 name = "ahash"

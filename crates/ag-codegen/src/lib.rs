@@ -91,8 +91,93 @@ impl Translator {
     }
 
     fn translate_module(&self, module: &Module) -> Result<swc::Module, CodegenError> {
+        // First pass: collect @js extern declarations
+        let mut js_externs: HashMap<String, JsExternInfo> = HashMap::new();
+        for item in &module.items {
+            match item {
+                Item::ExternFnDecl(ef) => {
+                    if let Some(ref ann) = ef.js_annotation {
+                        if let Some(ref module_name) = ann.module {
+                            js_externs.insert(ef.name.clone(), JsExternInfo {
+                                module: module_name.clone(),
+                                js_name: ann.js_name.clone(),
+                            });
+                        }
+                    }
+                }
+                Item::ExternStructDecl(es) => {
+                    if let Some(ref ann) = es.js_annotation {
+                        if let Some(ref module_name) = ann.module {
+                            js_externs.insert(es.name.clone(), JsExternInfo {
+                                module: module_name.clone(),
+                                js_name: ann.js_name.clone(),
+                            });
+                        }
+                    }
+                }
+                Item::ExternTypeDecl(et) => {
+                    if let Some(ref ann) = et.js_annotation {
+                        if let Some(ref module_name) = ann.module {
+                            js_externs.insert(et.name.clone(), JsExternInfo {
+                                module: module_name.clone(),
+                                js_name: ann.js_name.clone(),
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Collect referenced identifiers
+        let mut referenced = std::collections::HashSet::new();
+        for item in &module.items {
+            collect_referenced_idents(item, &mut referenced);
+        }
+
+        // Generate import statements for referenced @js externs, grouped by module
+        let mut module_imports: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
+        for (ag_name, info) in &js_externs {
+            if referenced.contains(ag_name) {
+                let entry = module_imports.entry(info.module.clone()).or_default();
+                entry.push((ag_name.clone(), info.js_name.clone()));
+            }
+        }
+
         let mut body = Vec::new();
 
+        // Emit merged import statements at the top
+        let mut sorted_modules: Vec<_> = module_imports.keys().cloned().collect();
+        sorted_modules.sort();
+        for module_path in sorted_modules {
+            let names = &module_imports[&module_path];
+            let specifiers: Vec<swc::ImportSpecifier> = names.iter().map(|(ag_name, js_name)| {
+                swc::ImportSpecifier::Named(swc::ImportNamedSpecifier {
+                    span: DUMMY_SP,
+                    local: ident(ag_name),
+                    imported: js_name.as_ref().map(|jn| {
+                        swc::ModuleExportName::Ident(ident(jn))
+                    }),
+                    is_type_only: false,
+                })
+            }).collect();
+            body.push(swc::ModuleItem::ModuleDecl(swc::ModuleDecl::Import(
+                swc::ImportDecl {
+                    span: DUMMY_SP,
+                    specifiers,
+                    src: Box::new(swc::Str {
+                        span: DUMMY_SP,
+                        value: module_path.into(),
+                        raw: None,
+                    }),
+                    type_only: false,
+                    with: None,
+                    phase: Default::default(),
+                },
+            )));
+        }
+
+        // Second pass: translate items
         for item in &module.items {
             match item {
                 Item::DslBlock(dsl) => {
@@ -127,6 +212,99 @@ impl Translator {
             body,
             shebang: None,
         })
+    }
+}
+
+struct JsExternInfo {
+    module: String,
+    js_name: Option<String>,
+}
+
+fn collect_referenced_idents(item: &Item, set: &mut std::collections::HashSet<String>) {
+    match item {
+        Item::FnDecl(f) => collect_idents_block(&f.body, set),
+        Item::VarDecl(v) => collect_idents_expr(&v.init, set),
+        Item::ExprStmt(e) => collect_idents_expr(&e.expr, set),
+        Item::DslBlock(dsl) => {
+            if let DslContent::Inline { parts } = &dsl.content {
+                for part in parts {
+                    if let DslPart::Capture(expr, _) = part {
+                        collect_idents_expr(expr, set);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_idents_expr(expr: &Expr, set: &mut std::collections::HashSet<String>) {
+    match expr {
+        Expr::Ident(id) => { set.insert(id.name.clone()); }
+        Expr::Binary(b) => { collect_idents_expr(&b.left, set); collect_idents_expr(&b.right, set); }
+        Expr::Unary(u) => collect_idents_expr(&u.operand, set),
+        Expr::Call(c) => {
+            collect_idents_expr(&c.callee, set);
+            for a in &c.args { collect_idents_expr(a, set); }
+        }
+        Expr::Member(m) => collect_idents_expr(&m.object, set),
+        Expr::Index(i) => { collect_idents_expr(&i.object, set); collect_idents_expr(&i.index, set); }
+        Expr::If(if_expr) => {
+            collect_idents_expr(&if_expr.condition, set);
+            collect_idents_block(&if_expr.then_block, set);
+            if let Some(ref eb) = if_expr.else_branch {
+                match eb {
+                    ElseBranch::Block(b) => collect_idents_block(b, set),
+                    ElseBranch::If(nested) => collect_idents_expr(&Expr::If(nested.clone()), set),
+                }
+            }
+        }
+        Expr::Match(m) => {
+            collect_idents_expr(&m.subject, set);
+            for arm in &m.arms {
+                collect_idents_expr(&arm.body, set);
+                if let Some(ref g) = arm.guard { collect_idents_expr(g, set); }
+            }
+        }
+        Expr::Block(b) => collect_idents_block(b, set),
+        Expr::Array(a) => { for e in &a.elements { collect_idents_expr(e, set); } }
+        Expr::Object(o) => { for f in &o.fields { collect_idents_expr(&f.value, set); } }
+        Expr::Arrow(ar) => {
+            match &ar.body {
+                ArrowBody::Expr(e) => collect_idents_expr(e, set),
+                ArrowBody::Block(b) => collect_idents_block(b, set),
+            }
+        }
+        Expr::Pipe(p) => { collect_idents_expr(&p.left, set); collect_idents_expr(&p.right, set); }
+        Expr::OptionalChain(oc) => collect_idents_expr(&oc.object, set),
+        Expr::NullishCoalesce(nc) => { collect_idents_expr(&nc.left, set); collect_idents_expr(&nc.right, set); }
+        Expr::Await(a) => collect_idents_expr(&a.expr, set),
+        Expr::ErrorPropagate(ep) => collect_idents_expr(&ep.expr, set),
+        Expr::Assign(a) => { collect_idents_expr(&a.target, set); collect_idents_expr(&a.value, set); }
+        Expr::TemplateString(ts) => {
+            for p in &ts.parts {
+                if let TemplatePart::Expr(e) = p { collect_idents_expr(e, set); }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_idents_block(block: &Block, set: &mut std::collections::HashSet<String>) {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::VarDecl(v) => collect_idents_expr(&v.init, set),
+            Stmt::ExprStmt(e) => collect_idents_expr(&e.expr, set),
+            Stmt::Return(r) => { if let Some(ref v) = r.value { collect_idents_expr(v, set); } }
+            Stmt::If(i) => collect_idents_expr(&Expr::If(Box::new(i.clone())), set),
+            Stmt::For(f) => { collect_idents_expr(&f.iter, set); collect_idents_block(&f.body, set); }
+            Stmt::While(w) => { collect_idents_expr(&w.condition, set); collect_idents_block(&w.body, set); }
+            Stmt::Match(m) => collect_idents_expr(&Expr::Match(Box::new(m.clone())), set),
+            Stmt::TryCatch(tc) => { collect_idents_block(&tc.try_block, set); collect_idents_block(&tc.catch_block, set); }
+        }
+    }
+    if let Some(ref tail) = block.tail_expr {
+        collect_idents_expr(tail, set);
     }
 }
 
@@ -211,8 +389,9 @@ fn translate_item_into(item: &Item, body: &mut Vec<swc::ModuleItem>) {
         Item::Import(imp) => {
             body.push(swc::ModuleItem::ModuleDecl(translate_import(imp)));
         }
-        // Struct, Enum, TypeAlias are erased
-        Item::StructDecl(_) | Item::EnumDecl(_) | Item::TypeAlias(_) => {}
+        // Struct, Enum, TypeAlias, Extern declarations are erased
+        Item::StructDecl(_) | Item::EnumDecl(_) | Item::TypeAlias(_)
+        | Item::ExternFnDecl(_) | Item::ExternStructDecl(_) | Item::ExternTypeDecl(_) => {}
         Item::ExprStmt(e) => {
             body.push(stmt_to_module_item(swc::Stmt::Expr(swc::ExprStmt {
                 span: DUMMY_SP,
