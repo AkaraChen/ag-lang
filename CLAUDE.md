@@ -49,7 +49,7 @@ ag-cli (binary)
 
 ### Key Concepts
 
-**DSL blocks** (`@kind name ``` ... ``` `) are the core domain abstraction. The parser captures them as `DslBlock` AST nodes with raw text + `#{ expr }` captures. During codegen, each block is dispatched to a registered `DslHandler`. Each DSL kind has its own crate (`ag-dsl-{kind}`) with internal lexer/parser/validator/AST for its directive syntax.
+**DSL blocks** (`` @kind name ``` ... ``` ``) are the core domain abstraction. The parser captures them as `DslBlock` AST nodes with raw text + `#{ expr }` captures. During codegen, each block is dispatched to a registered `DslHandler`. Each DSL kind has its own crate (`ag-dsl-{kind}`) with internal lexer/parser/validator/AST for its directive syntax.
 
 **A complete DSL crate** (see `ag-dsl-prompt`) has: `ast.rs`, `lexer.rs`, `parser.rs`, `validator.rs`, `codegen.rs`, `handler.rs`. The handler implements `ag_dsl_core::DslHandler` and is registered in `ag-codegen/src/lib.rs`.
 

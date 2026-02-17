@@ -17,7 +17,7 @@ cargo run -p ag-cli -- check examples/simple-agent/app.ag
 
 ## Language Overview
 
-```javascript
+````javascript
 // Tools — annotated functions that agents can invoke
 @tool("Look up documentation for a topic")
 fn lookup_docs(topic: str) -> str {
@@ -43,7 +43,7 @@ fn classify(q: str) -> str {
         _ => "general",
     }
 }
-```
+````
 
 See `spec/lang.md` for the full language specification and `examples/` for working code.
 
