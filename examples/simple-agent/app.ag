@@ -1,0 +1,73 @@
+// simple-agent: showcasing AgentScript language features
+// Demonstrates: prompts, functions, match, pipe, template strings, async
+
+import { fetch, Response } from "std:web/fetch"
+
+// ── Prompt templates (no captures at module scope) ────────
+
+@prompt system_prompt ```
+@role system
+You are a helpful coding assistant.
+You specialize in TypeScript and Rust programming.
+Always be concise and accurate.
+```
+
+@prompt greeting ```
+@role user
+Hello, what can you help me with today?
+```
+
+// ── Tool functions ────────────────────────────────────────
+
+@tool("Look up documentation for a given topic")
+fn lookup_docs(topic: str) -> str {
+    `Documentation for: ${topic}`
+}
+
+@tool("Calculate a math expression")
+fn calculate(op: str, a: num, b: num) -> num {
+    match op {
+        "add" => a + b,
+        "sub" => a - b,
+        "mul" => a * b,
+        "div" => if b == 0 { 0 } else { a / b },
+        _ => 0,
+    }
+}
+
+// ── Utility functions ─────────────────────────────────────
+
+fn format_result(value: any) -> str {
+    match value {
+        nil => "(no result)",
+        _ => `Result: ${value}`,
+    }
+}
+
+fn classify_question(q: str) -> str {
+    if q == "math" {
+        "calculation"
+    } else if q == "docs" {
+        "documentation"
+    } else {
+        "general"
+    }
+}
+
+// ── Pipe operator demo ────────────────────────────────────
+
+fn process(input: str) -> str {
+    input |> classify_question |> format_result
+}
+
+// ── Async workflow ────────────────────────────────────────
+
+pub async fn run(question: str) -> str {
+    let category = classify_question(question)
+    let answer = match category {
+        "calculation" => format_result(calculate("add", 2, 3)),
+        "documentation" => lookup_docs(question),
+        _ => "I can help with that!",
+    }
+    answer
+}
