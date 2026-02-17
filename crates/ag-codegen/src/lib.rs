@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::HashMap;
 
 use ag_ast::*;
@@ -7,7 +8,9 @@ use swc_ecma_ast as swc;
 use swc_ecma_codegen::text_writer::JsWriter;
 use swc_ecma_codegen::Emitter;
 
-// ── DslHandler trait and CodegenContext ────────────────────
+// ── Re-export DslHandler from ag-dsl-core ────────────────────
+
+pub use ag_dsl_core::DslHandler;
 
 #[derive(Debug, Clone)]
 pub struct CodegenError {
@@ -15,26 +18,60 @@ pub struct CodegenError {
     pub span: Span,
 }
 
-pub trait DslHandler {
-    fn handle(
-        &self,
-        block: &DslBlock,
-        ctx: &mut CodegenContext,
-    ) -> Result<Vec<swc::ModuleItem>, CodegenError>;
+/// Bridges the host compiler's expression translator to the DSL system.
+pub struct AgCodegenContext;
+
+impl ag_dsl_core::CodegenContext for AgCodegenContext {
+    fn translate_expr(&mut self, expr: &dyn Any) -> swc::Expr {
+        if let Some(ag_expr) = expr.downcast_ref::<ag_ast::Expr>() {
+            translate_expr(ag_expr)
+        } else {
+            swc::Expr::Ident(ident("undefined"))
+        }
+    }
 }
 
-pub struct CodegenContext;
+/// Convert an ag-ast DslBlock to an ag-dsl-core DslBlock for handler dispatch.
+fn convert_dsl_block(dsl: &ag_ast::DslBlock) -> ag_dsl_core::DslBlock {
+    let content = match &dsl.content {
+        ag_ast::DslContent::Inline { parts } => {
+            let core_parts: Vec<ag_dsl_core::DslPart> = parts
+                .iter()
+                .map(|p| match p {
+                    ag_ast::DslPart::Text(s, span) => ag_dsl_core::DslPart::Text(
+                        s.clone(),
+                        ag_dsl_core::Span::new(span.start, span.end),
+                    ),
+                    ag_ast::DslPart::Capture(expr, span) => {
+                        // Clone the inner Expr (not the Box) for type erasure
+                        let boxed: Box<dyn Any> = Box::new((**expr).clone());
+                        ag_dsl_core::DslPart::Capture(
+                            boxed,
+                            ag_dsl_core::Span::new(span.start, span.end),
+                        )
+                    }
+                })
+                .collect();
+            ag_dsl_core::DslContent::Inline { parts: core_parts }
+        }
+        ag_ast::DslContent::FileRef { path, span } => ag_dsl_core::DslContent::FileRef {
+            path: path.clone(),
+            span: ag_dsl_core::Span::new(span.start, span.end),
+        },
+    };
 
-impl CodegenContext {
-    pub fn translate_expr(&mut self, expr: &Expr) -> swc::Expr {
-        translate_expr(expr)
+    ag_dsl_core::DslBlock {
+        kind: dsl.kind.clone(),
+        name: dsl.name.name.clone(),
+        content,
+        span: ag_dsl_core::Span::new(dsl.span.start, dsl.span.end),
     }
 }
 
 // ── Translator with handler registry ──────────────────────
 
 pub struct Translator {
-    handlers: HashMap<String, Box<dyn DslHandler>>,
+    handlers: HashMap<String, Box<dyn ag_dsl_core::DslHandler>>,
 }
 
 impl Translator {
@@ -44,7 +81,7 @@ impl Translator {
         }
     }
 
-    pub fn register_dsl_handler(&mut self, kind: &str, handler: Box<dyn DslHandler>) {
+    pub fn register_dsl_handler(&mut self, kind: &str, handler: Box<dyn ag_dsl_core::DslHandler>) {
         self.handlers.insert(kind.to_string(), handler);
     }
 
@@ -60,8 +97,14 @@ impl Translator {
             match item {
                 Item::DslBlock(dsl) => {
                     if let Some(handler) = self.handlers.get(&dsl.kind) {
-                        let mut ctx = CodegenContext;
-                        let items = handler.handle(dsl, &mut ctx)?;
+                        let mut ctx = AgCodegenContext;
+                        let core_block = convert_dsl_block(dsl);
+                        let items = handler.handle(&core_block, &mut ctx).map_err(|e| {
+                            CodegenError {
+                                message: e.message,
+                                span: dsl.span,
+                            }
+                        })?;
                         body.extend(items);
                     } else {
                         return Err(CodegenError {
@@ -87,129 +130,14 @@ impl Translator {
     }
 }
 
-// ── Built-in prompt handler ───────────────────────────────
-
-pub struct PromptHandler;
-
-impl DslHandler for PromptHandler {
-    fn handle(
-        &self,
-        block: &DslBlock,
-        ctx: &mut CodegenContext,
-    ) -> Result<Vec<swc::ModuleItem>, CodegenError> {
-        let name = &block.name.name;
-
-        match &block.content {
-            DslContent::Inline { parts } => {
-                // Build a JS template literal from parts
-                let mut quasis = Vec::new();
-                let mut exprs: Vec<Box<swc::Expr>> = Vec::new();
-
-                let mut current_text = String::new();
-                for (i, part) in parts.iter().enumerate() {
-                    match part {
-                        DslPart::Text(text, _) => {
-                            current_text.push_str(text);
-                        }
-                        DslPart::Capture(expr, _) => {
-                            // Flush accumulated text as a quasi element
-                            quasis.push(swc::TplElement {
-                                span: DUMMY_SP,
-                                tail: false,
-                                cooked: Some(current_text.clone().into()),
-                                raw: current_text.clone().into(),
-                            });
-                            current_text.clear();
-                            exprs.push(Box::new(ctx.translate_expr(expr)));
-                        }
-                    }
-                }
-                // Final quasi element (tail)
-                quasis.push(swc::TplElement {
-                    span: DUMMY_SP,
-                    tail: true,
-                    cooked: Some(current_text.clone().into()),
-                    raw: current_text.into(),
-                });
-
-                let tpl = swc::Expr::Tpl(swc::Tpl {
-                    span: DUMMY_SP,
-                    exprs,
-                    quasis,
-                });
-
-                let decl = swc::Stmt::Decl(swc::Decl::Var(Box::new(swc::VarDecl {
-                    span: DUMMY_SP,
-                    ctxt: SyntaxContext::empty(),
-                    kind: swc::VarDeclKind::Const,
-                    declare: false,
-                    decls: vec![swc::VarDeclarator {
-                        span: DUMMY_SP,
-                        name: swc::Pat::Ident(binding_ident(name)),
-                        init: Some(Box::new(tpl)),
-                        definite: false,
-                    }],
-                })));
-
-                Ok(vec![stmt_to_module_item(decl)])
-            }
-            DslContent::FileRef { path, .. } => {
-                // Generate: const <name> = await fs.readFile("<path>", "utf-8");
-                let read_call = swc::Expr::Call(swc::CallExpr {
-                    span: DUMMY_SP,
-                    ctxt: SyntaxContext::empty(),
-                    callee: swc::Callee::Expr(Box::new(swc::Expr::Member(swc::MemberExpr {
-                        span: DUMMY_SP,
-                        obj: Box::new(swc::Expr::Ident(ident("fs"))),
-                        prop: swc::MemberProp::Ident(swc::IdentName {
-                            span: DUMMY_SP,
-                            sym: "readFile".into(),
-                        }),
-                    }))),
-                    args: vec![
-                        expr_or_spread(swc::Expr::Lit(swc::Lit::Str(swc::Str {
-                            span: DUMMY_SP,
-                            value: path.clone().into(),
-                            raw: None,
-                        }))),
-                        expr_or_spread(swc::Expr::Lit(swc::Lit::Str(swc::Str {
-                            span: DUMMY_SP,
-                            value: "utf-8".into(),
-                            raw: None,
-                        }))),
-                    ],
-                    type_args: None,
-                });
-
-                let await_expr = swc::Expr::Await(swc::AwaitExpr {
-                    span: DUMMY_SP,
-                    arg: Box::new(read_call),
-                });
-
-                let decl = swc::Stmt::Decl(swc::Decl::Var(Box::new(swc::VarDecl {
-                    span: DUMMY_SP,
-                    ctxt: SyntaxContext::empty(),
-                    kind: swc::VarDeclKind::Const,
-                    declare: false,
-                    decls: vec![swc::VarDeclarator {
-                        span: DUMMY_SP,
-                        name: swc::Pat::Ident(binding_ident(name)),
-                        init: Some(Box::new(await_expr)),
-                        definite: false,
-                    }],
-                })));
-
-                Ok(vec![stmt_to_module_item(decl)])
-            }
-        }
-    }
-}
-
 // ── Legacy API (keeps existing code working) ──────────────
 
 pub fn codegen(module: &Module) -> String {
     let mut translator = Translator::new();
-    translator.register_dsl_handler("prompt", Box::new(PromptHandler));
+    translator.register_dsl_handler(
+        "prompt",
+        Box::new(ag_dsl_prompt::handler::PromptDslHandler),
+    );
     translator.codegen(module).unwrap_or_else(|e| {
         panic!("codegen error: {}", e.message)
     })
@@ -1306,27 +1234,31 @@ mod tests {
         assert!(js.contains("`"));
     }
 
-    // ── DSL codegen tests ──
+    // ── DSL codegen tests (prompt-dsl handler) ──
 
     #[test]
     fn dsl_prompt_inline_no_capture() {
-        let js = compile("@prompt greeting ```\nHello, world!\n```\n");
+        let js = compile("@prompt greeting ```\n@role system\nHello, world!\n```\n");
         assert!(js.contains("const greeting"));
+        assert!(js.contains("PromptTemplate"));
         assert!(js.contains("Hello, world!"));
+        assert!(js.contains("system"));
     }
 
     #[test]
     fn dsl_prompt_inline_with_captures() {
-        let js = compile("@prompt system ```\nYou are #{role}. Answer in #{lang}.\n```\n");
+        let js = compile("@prompt system ```\n@role system\nYou are #{role}. Answer in #{lang}.\n```\n");
         assert!(js.contains("const system"));
-        assert!(js.contains("${role}"));
-        assert!(js.contains("${lang}"));
+        assert!(js.contains("PromptTemplate"));
+        assert!(js.contains("ctx.role"));
+        assert!(js.contains("ctx.lang"));
     }
 
     #[test]
     fn dsl_prompt_file_ref() {
         let js = compile(r#"@prompt system from "./system-prompt.txt""#);
         assert!(js.contains("const system"));
+        assert!(js.contains("PromptTemplate"));
         assert!(js.contains("readFile"));
         assert!(js.contains("system-prompt.txt"));
     }
@@ -1334,7 +1266,7 @@ mod tests {
     #[test]
     fn dsl_unregistered_handler_error() {
         let parsed = ag_parser::parse("@graphql GetUsers ```\nquery { users }\n```\n");
-        let mut translator = Translator::new();
+        let translator = Translator::new();
         // Don't register any handler
         let result = translator.codegen(&parsed.module);
         assert!(result.is_err());
@@ -1345,7 +1277,8 @@ mod tests {
 
     #[test]
     fn dsl_handler_uses_block_name() {
-        let js = compile("@prompt my_prompt ```\nContent here\n```\n");
+        let js = compile("@prompt my_prompt ```\n@role system\nContent here\n```\n");
         assert!(js.contains("const my_prompt"));
+        assert!(js.contains("PromptTemplate"));
     }
 }

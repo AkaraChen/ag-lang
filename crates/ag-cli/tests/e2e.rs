@@ -288,11 +288,12 @@ fn build_default_output_path() {
 #[test]
 fn build_dsl_prompt_inline_with_capture() {
     let (js, _, code) = build_ag(
-        "let role: str = \"admin\"\n@prompt system ```\nYou are #{role}.\n```\n",
+        "let role: str = \"admin\"\n@prompt system ```\n@role system\nYou are #{role}.\n```\n",
     );
     assert_eq!(code, 0);
     assert!(js.contains("const system"));
-    assert!(js.contains("${role}"));
+    assert!(js.contains("PromptTemplate"));
+    assert!(js.contains("ctx.role"));
 }
 
 #[test]
@@ -302,6 +303,7 @@ fn build_dsl_prompt_from_file() {
     );
     assert_eq!(code, 0);
     assert!(js.contains("const system"));
+    assert!(js.contains("PromptTemplate"));
     assert!(js.contains("readFile"));
 }
 
@@ -310,4 +312,52 @@ fn check_dsl_capture_undefined_var_error() {
     let (stderr, code) = check_ag("@prompt sys ```\n#{undefined_var}\n```\n");
     assert_ne!(code, 0);
     assert!(stderr.contains("error"));
+}
+
+#[test]
+fn build_dsl_prompt_full_template() {
+    let (js, _, code) = build_ag(r#"
+@prompt chat ```
+@model claude-sonnet | gpt-4o
+@role system
+You are a helpful assistant.
+@examples {
+  user: "hello"
+  assistant: "hi there"
+}
+@constraints {
+  temperature: 0.7
+  max_tokens: 4096
+}
+```
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains("PromptTemplate"));
+    assert!(js.contains("claude-sonnet"));
+    assert!(js.contains("gpt-4o"));
+    assert!(js.contains("system"));
+    assert!(js.contains("helpful assistant"));
+    assert!(js.contains("examples"));
+    assert!(js.contains("hello"));
+    assert!(js.contains("constraints"));
+    assert!(js.contains("temperature"));
+    assert!(js.contains("0.7"));
+}
+
+#[test]
+fn build_dsl_prompt_with_output_schema() {
+    let (js, _, code) = build_ag(r#"
+@prompt qa ```
+@role system
+Answer the question.
+@output {
+  answer: str
+  confidence: num
+}
+```
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains("outputSchema"));
+    assert!(js.contains("string"));
+    assert!(js.contains("number"));
 }

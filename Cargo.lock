@@ -31,6 +31,8 @@ name = "ag-codegen"
 version = "0.1.0"
 dependencies = [
  "ag-ast",
+ "ag-dsl-core",
+ "ag-dsl-prompt",
  "ag-parser",
  "swc_common",
  "swc_ecma_ast",

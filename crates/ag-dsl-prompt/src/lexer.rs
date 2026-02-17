@@ -1,4 +1,4 @@
-use ag_dsl_core::{DslPart, Span};
+use ag_dsl_core::DslPart;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PromptToken {
@@ -353,7 +353,16 @@ fn lex_brace_block(chars: &mut std::iter::Peekable<std::str::Chars>, tokens: &mu
                 }
                 tokens.push(PromptToken::StringLiteral(s));
             }
-            Some(&c) if c.is_ascii_digit() || (c == '-' && chars.clone().nth(1).is_some_and(|c| c.is_ascii_digit())) => {
+            Some(&c) if c.is_ascii_digit() || c == '-' => {
+                // Check if '-' is followed by a digit (negative number)
+                if c == '-' {
+                    let mut lookahead = chars.clone();
+                    lookahead.next(); // skip '-'
+                    if !lookahead.peek().is_some_and(|ch| ch.is_ascii_digit()) {
+                        chars.next(); // skip unknown char
+                        continue;
+                    }
+                }
                 let mut num_str = String::new();
                 if c == '-' {
                     num_str.push(c);
@@ -401,6 +410,7 @@ fn lex_brace_block(chars: &mut std::iter::Peekable<std::str::Chars>, tokens: &mu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ag_dsl_core::Span;
 
     fn make_text(s: &str) -> DslPart {
         DslPart::Text(s.to_string(), Span::dummy())
