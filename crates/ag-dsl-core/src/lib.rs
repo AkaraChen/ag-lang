@@ -60,6 +60,7 @@ impl std::fmt::Debug for DslPart {
 
 pub trait CodegenContext {
     fn translate_expr(&mut self, expr: &dyn Any) -> swc_ecma_ast::Expr;
+    fn translate_block(&mut self, block: &dyn Any) -> Vec<swc_ecma_ast::Stmt>;
 }
 
 // ── DslHandler trait ─────────────────────────────────────

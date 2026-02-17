@@ -584,6 +584,9 @@ mod tests {
             // Return a simple ident for testing
             swc::Expr::Ident(ident("mockVar"))
         }
+        fn translate_block(&mut self, _block: &dyn Any) -> Vec<swc::Stmt> {
+            Vec::new()
+        }
     }
 
     #[test]

@@ -163,10 +163,26 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Fn | TokenKind::Async => self.parse_fn_decl(false).map(Item::FnDecl),
             TokenKind::Pub => {
-                let start = self.current_span();
                 self.advance(); // consume 'pub'
                 match self.peek() {
                     TokenKind::Fn | TokenKind::Async => self.parse_fn_decl(true).map(Item::FnDecl),
+                    TokenKind::At => {
+                        // Check for `pub @tool fn`
+                        if self.pos + 1 < self.tokens.len() {
+                            if let TokenKind::Ident(ref name) = self.tokens[self.pos + 1].kind {
+                                if name == "tool" {
+                                    let annotation = self.parse_tool_annotation()?;
+                                    if !matches!(self.peek(), TokenKind::Fn | TokenKind::Async) {
+                                        self.error("@tool annotation can only be applied to fn declarations");
+                                        return None;
+                                    }
+                                    return self.parse_fn_decl_with_tool(true, Some(annotation)).map(Item::FnDecl);
+                                }
+                            }
+                        }
+                        self.error("expected `fn` after `pub`");
+                        None
+                    }
                     _ => {
                         self.error("expected `fn` after `pub`");
                         None
@@ -178,11 +194,14 @@ impl<'a> Parser<'a> {
             TokenKind::Type => self.parse_type_alias().map(Item::TypeAlias),
             TokenKind::Extern => self.parse_extern_item(None),
             TokenKind::At => {
-                // Check if this is @js annotation (followed by "js" ident)
+                // Check if this is @js or @tool annotation (followed by ident)
                 if self.pos + 1 < self.tokens.len() {
                     if let TokenKind::Ident(ref name) = self.tokens[self.pos + 1].kind {
                         if name == "js" {
                             return self.parse_js_annotated_extern();
+                        }
+                        if name == "tool" {
+                            return self.parse_tool_annotated_fn();
                         }
                     }
                 }
@@ -332,6 +351,10 @@ impl<'a> Parser<'a> {
     // ── Function declarations ──────────────────────────────
 
     fn parse_fn_decl(&mut self, is_pub: bool) -> Option<FnDecl> {
+        self.parse_fn_decl_with_tool(is_pub, None)
+    }
+
+    fn parse_fn_decl_with_tool(&mut self, is_pub: bool, tool_annotation: Option<ToolAnnotation>) -> Option<FnDecl> {
         let start = self.current_span();
 
         let is_async = if matches!(self.peek(), TokenKind::Async) {
@@ -365,6 +388,7 @@ impl<'a> Parser<'a> {
             body,
             is_pub,
             is_async,
+            tool_annotation,
             span: Span::new(start.start, end.end),
         })
     }
@@ -677,14 +701,33 @@ impl<'a> Parser<'a> {
                                 span: eof_span,
                                 text: String::new(),
                             });
-                            // Parse the capture expression
+                            // Parse capture as block body (statements + optional tail expr)
                             let mut sub_parser = Parser::new(capture_tokens, self.source);
-                            if let Some(expr) = sub_parser.parse_expr(0) {
-                                let expr_span = cap_start_span;
-                                parts.push(DslPart::Capture(Box::new(expr), expr_span));
+                            let (stmts, tail_expr) = sub_parser.parse_block_body();
+                            if stmts.is_empty() && tail_expr.is_none() {
+                                self.diagnostics.push(Diagnostic {
+                                    message: "empty capture".into(),
+                                    span: cap_start_span,
+                                });
+                            } else if stmts.is_empty() {
+                                // Single expression — use directly (backward compatible)
+                                if let Some(expr) = tail_expr {
+                                    parts.push(DslPart::Capture(Box::new(*expr), cap_start_span));
+                                }
                             } else {
-                                self.diagnostics.extend(sub_parser.diagnostics);
+                                // Statement block — wrap in Expr::Block
+                                let span = cap_start_span;
+                                let block = Block {
+                                    stmts,
+                                    tail_expr,
+                                    span,
+                                };
+                                parts.push(DslPart::Capture(
+                                    Box::new(Expr::Block(Box::new(block))),
+                                    cap_start_span,
+                                ));
                             }
+                            self.diagnostics.extend(sub_parser.diagnostics);
                         }
                         TokenKind::DslBlockEnd => {
                             dsl_pos += 1;
@@ -772,6 +815,44 @@ impl<'a> Parser<'a> {
             js_name,
             span: Span::new(start.start, end.end),
         })
+    }
+
+    fn parse_tool_annotation(&mut self) -> Option<ToolAnnotation> {
+        let start = self.current_span();
+        self.advance(); // consume '@'
+        let name = self.expect_ident()?;
+        if name != "tool" {
+            self.error("expected `tool` after `@`");
+            return None;
+        }
+        let description = if matches!(self.peek(), TokenKind::LParen) {
+            self.advance(); // consume '('
+            let desc = self.parse_string_literal()?;
+            self.expect(&TokenKind::RParen)?;
+            Some(desc)
+        } else {
+            None
+        };
+        let end = self.current_span();
+        Some(ToolAnnotation {
+            description,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    fn parse_tool_annotated_fn(&mut self) -> Option<Item> {
+        let annotation = self.parse_tool_annotation()?;
+        let is_pub = if matches!(self.peek(), TokenKind::Pub) {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        if !matches!(self.peek(), TokenKind::Fn | TokenKind::Async) {
+            self.error("@tool annotation can only be applied to fn declarations");
+            return None;
+        }
+        self.parse_fn_decl_with_tool(is_pub, Some(annotation)).map(Item::FnDecl)
     }
 
     fn parse_extern_item(&mut self, js_annotation: Option<JsAnnotation>) -> Option<Item> {
@@ -1125,10 +1206,10 @@ impl<'a> Parser<'a> {
 
     // ── Block parsing ──────────────────────────────────────
 
-    fn parse_block(&mut self) -> Option<Block> {
-        let start = self.current_span();
-        self.expect(&TokenKind::LBrace)?;
-
+    /// Parse the body of a block: statements + optional tail expression.
+    /// Stops at `RBrace` or `Eof` without consuming the terminator.
+    /// Used by both `parse_block` (for `{ ... }`) and DSL capture parsing (for `#{ ... }`).
+    fn parse_block_body(&mut self) -> (Vec<Stmt>, Option<Box<Expr>>) {
         let mut stmts = Vec::new();
         let mut tail_expr = None;
 
@@ -1172,7 +1253,7 @@ impl<'a> Parser<'a> {
                             self.advance();
                             let span = self.current_span();
                             stmts.push(Stmt::ExprStmt(ExprStmt { expr, span }));
-                        } else if matches!(self.peek(), TokenKind::RBrace) {
+                        } else if matches!(self.peek(), TokenKind::RBrace | TokenKind::Eof) {
                             // This is the tail expression (implicit return)
                             tail_expr = Some(Box::new(expr));
                         } else {
@@ -1185,6 +1266,15 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+
+        (stmts, tail_expr)
+    }
+
+    fn parse_block(&mut self) -> Option<Block> {
+        let start = self.current_span();
+        self.expect(&TokenKind::LBrace)?;
+
+        let (stmts, tail_expr) = self.parse_block_body();
 
         self.expect(&TokenKind::RBrace)?;
         let end = self.current_span();
@@ -2492,5 +2582,196 @@ fn foo() -> int { 1 }"#,
         assert_eq!(m.items.len(), 2);
         assert!(matches!(m.items[0], Item::ExternFnDecl(_)));
         assert!(matches!(m.items[1], Item::FnDecl(_)));
+    }
+
+    // ── DSL block capture tests ──────────────────────────────
+
+    /// Helper: extract the capture expression from a DslPart::Capture
+    fn capture_expr(part: &DslPart) -> &Expr {
+        match part {
+            DslPart::Capture(any, _) => {
+                let any_ref: &dyn std::any::Any = &**any;
+                any_ref.downcast_ref::<Expr>().expect("capture should be Expr")
+            }
+            _ => panic!("expected DslPart::Capture"),
+        }
+    }
+
+    #[test]
+    fn dsl_capture_single_ident() {
+        let m = parse_ok("@prompt p ```\n#{name}\n```\n");
+        if let Item::DslBlock(dsl) = &m.items[0] {
+            if let DslContent::Inline { parts } = &dsl.content {
+                let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
+                let expr = capture_expr(cap);
+                assert!(matches!(expr, Expr::Ident(_)), "single ident should be unwrapped Ident, got {:?}", expr);
+            } else { panic!("expected inline"); }
+        } else { panic!("expected DslBlock"); }
+    }
+
+    #[test]
+    fn dsl_capture_single_binary_expr() {
+        let m = parse_ok("@prompt p ```\n#{a + b}\n```\n");
+        if let Item::DslBlock(dsl) = &m.items[0] {
+            if let DslContent::Inline { parts } = &dsl.content {
+                let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
+                let expr = capture_expr(cap);
+                assert!(matches!(expr, Expr::Binary(_)), "a + b should be Binary, got {:?}", expr);
+            } else { panic!("expected inline"); }
+        } else { panic!("expected DslBlock"); }
+    }
+
+    #[test]
+    fn dsl_capture_single_array() {
+        let m = parse_ok("@prompt p ```\n#{[x, y]}\n```\n");
+        if let Item::DslBlock(dsl) = &m.items[0] {
+            if let DslContent::Inline { parts } = &dsl.content {
+                let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
+                let expr = capture_expr(cap);
+                assert!(matches!(expr, Expr::Array(_)), "array literal should be unwrapped Array, got {:?}", expr);
+            } else { panic!("expected inline"); }
+        } else { panic!("expected DslBlock"); }
+    }
+
+    #[test]
+    fn dsl_capture_single_fn_expr() {
+        let m = parse_ok("@prompt p ```\n#{fn(x) { x + 1 }}\n```\n");
+        if let Item::DslBlock(dsl) = &m.items[0] {
+            if let DslContent::Inline { parts } = &dsl.content {
+                let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
+                let expr = capture_expr(cap);
+                // fn expression parses as Expr::Arrow
+                assert!(matches!(expr, Expr::Arrow(_)), "fn expr should be unwrapped Arrow, got {:?}", expr);
+            } else { panic!("expected inline"); }
+        } else { panic!("expected DslBlock"); }
+    }
+
+    #[test]
+    fn dsl_capture_block_with_stmts_and_tail() {
+        let m = parse_ok("@prompt p ```\n#{let x = 1; let y = 2; x + y}\n```\n");
+        if let Item::DslBlock(dsl) = &m.items[0] {
+            if let DslContent::Inline { parts } = &dsl.content {
+                let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
+                let expr = capture_expr(cap);
+                if let Expr::Block(block) = expr {
+                    assert_eq!(block.stmts.len(), 2, "should have 2 statements");
+                    assert!(block.tail_expr.is_some(), "should have tail expression");
+                } else {
+                    panic!("expected Expr::Block, got {:?}", expr);
+                }
+            } else { panic!("expected inline"); }
+        } else { panic!("expected DslBlock"); }
+    }
+
+    #[test]
+    fn dsl_capture_block_no_tail() {
+        let m = parse_ok("@prompt p ```\n#{let x = 1; println(x);}\n```\n");
+        if let Item::DslBlock(dsl) = &m.items[0] {
+            if let DslContent::Inline { parts } = &dsl.content {
+                let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
+                let expr = capture_expr(cap);
+                if let Expr::Block(block) = expr {
+                    assert_eq!(block.stmts.len(), 2, "should have 2 statements (let + expr stmt)");
+                    assert!(block.tail_expr.is_none(), "should have no tail expression");
+                } else {
+                    panic!("expected Expr::Block, got {:?}", expr);
+                }
+            } else { panic!("expected inline"); }
+        } else { panic!("expected DslBlock"); }
+    }
+
+    #[test]
+    fn dsl_capture_empty_diagnostic() {
+        let result = parse("@prompt p ```\n#{}\n```\n");
+        assert!(
+            result.diagnostics.iter().any(|d| d.message.contains("empty capture")),
+            "expected 'empty capture' diagnostic, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    // ── @tool annotation tests ──
+
+    #[test]
+    fn tool_bare_annotation() {
+        let result = parse("@tool fn foo() { }");
+        assert!(result.diagnostics.is_empty(), "errors: {:?}", result.diagnostics);
+        if let Item::FnDecl(f) = &result.module.items[0] {
+            assert_eq!(f.name, "foo");
+            assert!(f.tool_annotation.is_some());
+            assert!(f.tool_annotation.as_ref().unwrap().description.is_none());
+        } else { panic!("expected FnDecl"); }
+    }
+
+    #[test]
+    fn tool_with_description() {
+        let result = parse(r#"@tool("desc") fn foo() { }"#);
+        assert!(result.diagnostics.is_empty(), "errors: {:?}", result.diagnostics);
+        if let Item::FnDecl(f) = &result.module.items[0] {
+            assert_eq!(f.name, "foo");
+            let ann = f.tool_annotation.as_ref().unwrap();
+            assert_eq!(ann.description.as_deref(), Some("desc"));
+        } else { panic!("expected FnDecl"); }
+    }
+
+    #[test]
+    fn tool_pub_fn() {
+        let result = parse("@tool pub fn foo() { }");
+        assert!(result.diagnostics.is_empty(), "errors: {:?}", result.diagnostics);
+        if let Item::FnDecl(f) = &result.module.items[0] {
+            assert!(f.is_pub);
+            assert!(f.tool_annotation.is_some());
+        } else { panic!("expected FnDecl"); }
+    }
+
+    #[test]
+    fn pub_tool_fn() {
+        let result = parse("pub @tool fn foo() { }");
+        assert!(result.diagnostics.is_empty(), "errors: {:?}", result.diagnostics);
+        if let Item::FnDecl(f) = &result.module.items[0] {
+            assert!(f.is_pub);
+            assert!(f.tool_annotation.is_some());
+        } else { panic!("expected FnDecl"); }
+    }
+
+    #[test]
+    fn tool_pub_async_fn() {
+        let result = parse(r#"@tool("desc") pub async fn foo() { }"#);
+        assert!(result.diagnostics.is_empty(), "errors: {:?}", result.diagnostics);
+        if let Item::FnDecl(f) = &result.module.items[0] {
+            assert!(f.is_pub);
+            assert!(f.is_async);
+            let ann = f.tool_annotation.as_ref().unwrap();
+            assert_eq!(ann.description.as_deref(), Some("desc"));
+        } else { panic!("expected FnDecl"); }
+    }
+
+    #[test]
+    fn tool_on_struct_error() {
+        let result = parse("@tool struct Foo { }");
+        assert!(
+            result.diagnostics.iter().any(|d| d.message.contains("@tool annotation can only be applied to fn declarations")),
+            "expected error about @tool on non-fn, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn tool_on_let_error() {
+        let result = parse("@tool let x = 5");
+        assert!(
+            result.diagnostics.iter().any(|d| d.message.contains("@tool annotation can only be applied to fn declarations")),
+            "expected error about @tool on non-fn, got {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn fn_without_tool_annotation() {
+        let result = parse("fn foo() { }");
+        assert!(result.diagnostics.is_empty(), "errors: {:?}", result.diagnostics);
+        if let Item::FnDecl(f) = &result.module.items[0] {
+            assert!(f.tool_annotation.is_none());
+        } else { panic!("expected FnDecl"); }
     }
 }

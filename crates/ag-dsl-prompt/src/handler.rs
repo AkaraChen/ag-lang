@@ -69,6 +69,9 @@ mod tests {
                 optional: false,
             })
         }
+        fn translate_block(&mut self, _block: &dyn std::any::Any) -> Vec<swc_ecma_ast::Stmt> {
+            Vec::new()
+        }
     }
 
     #[test]

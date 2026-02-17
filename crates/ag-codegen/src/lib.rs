@@ -29,6 +29,14 @@ impl ag_dsl_core::CodegenContext for AgCodegenContext {
             swc::Expr::Ident(ident("undefined"))
         }
     }
+
+    fn translate_block(&mut self, block: &dyn Any) -> Vec<swc::Stmt> {
+        if let Some(ag_block) = block.downcast_ref::<ag_ast::Block>() {
+            translate_block_with_implicit_return(ag_block).stmts
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 /// Convert an ag-ast DslBlock to an ag-dsl-core DslBlock for handler dispatch.
@@ -1462,5 +1470,26 @@ mod tests {
         let js = compile("@prompt my_prompt ```\n@role system\nContent here\n```\n");
         assert!(js.contains("const my_prompt"));
         assert!(js.contains("PromptTemplate"));
+    }
+
+    #[test]
+    fn dsl_block_capture_compiles() {
+        // Block capture: #{let x = 1; x + 1} compiles through the full pipeline.
+        // The prompt handler wraps captures as ctx.__capture_N in template strings,
+        // so the block expression doesn't appear inline. But it must parse and
+        // codegen without errors.
+        let js = compile("@prompt p ```\n@role system\nResult: #{let x = 1; x + 1}\n```\n");
+        assert!(js.contains("const p"), "should declare prompt variable");
+        assert!(js.contains("PromptTemplate"), "should use PromptTemplate");
+        assert!(js.contains("__capture_0"), "block capture should produce capture reference");
+    }
+
+    #[test]
+    fn block_expr_codegen_iife() {
+        // Verify that Expr::Block compiles to an IIFE when used as a regular expression
+        let js = compile("let result = { let x = 1; x + 1 }");
+        // Expr::Block → block_to_expr → IIFE: (()=>{ let x = 1; return x + 1; })()
+        assert!(js.contains("x = 1"), "IIFE should contain the let statement");
+        assert!(js.contains("return"), "IIFE should have implicit return for tail expression");
     }
 }

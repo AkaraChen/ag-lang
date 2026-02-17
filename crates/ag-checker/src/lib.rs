@@ -97,15 +97,24 @@ impl Scope {
 
 // ── Checker ────────────────────────────────────────────────
 
+/// Metadata about a registered @tool function.
+#[derive(Debug, Clone)]
+pub struct ToolInfo {
+    pub description: Option<String>,
+    pub param_types: Vec<(String, Type)>,
+}
+
 pub struct Checker {
     scope: Scope,
     pub diagnostics: Vec<Diagnostic>,
     type_aliases: HashMap<String, Type>,
+    pub tool_registry: HashMap<String, ToolInfo>,
     in_async: bool,
 }
 
 pub struct CheckResult {
     pub diagnostics: Vec<Diagnostic>,
+    pub tool_registry: HashMap<String, ToolInfo>,
 }
 
 pub fn check(module: &Module) -> CheckResult {
@@ -113,6 +122,7 @@ pub fn check(module: &Module) -> CheckResult {
     checker.check_module(module);
     CheckResult {
         diagnostics: checker.diagnostics,
+        tool_registry: checker.tool_registry,
     }
 }
 
@@ -122,6 +132,7 @@ impl Checker {
             scope: Scope::new(),
             diagnostics: Vec::new(),
             type_aliases: HashMap::new(),
+            tool_registry: HashMap::new(),
             in_async: false,
         }
     }
@@ -131,6 +142,21 @@ impl Checker {
             message: msg.into(),
             span,
         });
+    }
+
+    fn is_serializable_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Str | Type::Num | Type::Int | Type::Bool | Type::Nil | Type::Any | Type::Unknown => true,
+            Type::Array(inner) => self.is_serializable_type(inner),
+            Type::Map(k, v) => matches!(**k, Type::Str) && self.is_serializable_type(v),
+            Type::Nullable(inner) => self.is_serializable_type(inner),
+            Type::Union(a, b) => self.is_serializable_type(a) && self.is_serializable_type(b),
+            Type::Struct(_, fields) => fields.iter().all(|(_, t)| self.is_serializable_type(t)),
+            Type::Enum(_, variants) => variants.iter().all(|(_, fields)| {
+                fields.iter().all(|(_, t)| self.is_serializable_type(t))
+            }),
+            Type::Function(_, _) | Type::VariadicFunction(_, _) | Type::Promise(_) => false,
+        }
     }
 
     // ── Type compatibility ─────────────────────────────────
@@ -422,6 +448,43 @@ impl Checker {
     // ── Function check ─────────────────────────────────────
 
     fn check_fn_decl(&mut self, f: &FnDecl) {
+        // Register in tool registry if @tool annotated
+        if let Some(ref ann) = f.tool_annotation {
+            let param_types: Vec<(String, Type)> = f
+                .params
+                .iter()
+                .map(|p| {
+                    let ty = p
+                        .ty
+                        .as_ref()
+                        .map(|t| self.resolve_type(t))
+                        .unwrap_or(Type::Any);
+                    (p.name.clone(), ty)
+                })
+                .collect();
+
+            // Check serializability of param types
+            for (name, ty) in &param_types {
+                if !self.is_serializable_type(ty) {
+                    self.error(
+                        format!(
+                            "@tool fn `{}`: parameter `{}` has non-serializable type `{}`",
+                            f.name, name, ty
+                        ),
+                        f.span,
+                    );
+                }
+            }
+
+            self.tool_registry.insert(
+                f.name.clone(),
+                ToolInfo {
+                    description: ann.description.clone(),
+                    param_types,
+                },
+            );
+        }
+
         let parent = std::mem::replace(&mut self.scope, Scope::new());
         self.scope = Scope::child(parent);
         let prev_async = self.in_async;
@@ -1083,5 +1146,53 @@ mod tests {
     fn dsl_capture_type_not_constrained() {
         // Any type should be accepted in a capture — no type constraint error
         assert_no_errors("let count: int = 42\n@prompt sys ```\n#{count}\n```\n");
+    }
+
+    // ── @tool annotation tests ──
+
+    fn check_full(src: &str) -> CheckResult {
+        let parsed = ag_parser::parse(src);
+        assert!(
+            parsed.diagnostics.is_empty(),
+            "parse errors: {:?}",
+            parsed.diagnostics
+        );
+        check(&parsed.module)
+    }
+
+    #[test]
+    fn tool_serializable_params_no_warning() {
+        assert_no_errors("@tool fn fetch(url: str, count: int, verbose: bool) { }");
+    }
+
+    #[test]
+    fn tool_fn_type_param_warning() {
+        assert_has_error(
+            "@tool fn run(callback: (str) -> str) { }",
+            "non-serializable type",
+        );
+    }
+
+    #[test]
+    fn tool_array_of_serializable_passes() {
+        assert_no_errors("@tool fn process(items: [str]) { }");
+    }
+
+    #[test]
+    fn tool_fn_registered_in_registry() {
+        let result = check_full(r#"@tool("search the web") fn search(query: str) { }"#);
+        assert!(result.diagnostics.is_empty(), "errors: {:?}", result.diagnostics);
+        assert!(result.tool_registry.contains_key("search"));
+        let info = &result.tool_registry["search"];
+        assert_eq!(info.description.as_deref(), Some("search the web"));
+        assert_eq!(info.param_types.len(), 1);
+        assert_eq!(info.param_types[0].0, "query");
+    }
+
+    #[test]
+    fn non_tool_fn_not_in_registry() {
+        let result = check_full("fn helper(x: int) -> int { x + 1 }");
+        assert!(result.diagnostics.is_empty(), "errors: {:?}", result.diagnostics);
+        assert!(result.tool_registry.is_empty());
     }
 }

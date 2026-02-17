@@ -375,6 +375,12 @@ pub struct JsAnnotation {
 }
 
 #[derive(Debug, Clone)]
+pub struct ToolAnnotation {
+    pub description: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct ExternFnDecl {
     pub name: String,
     pub params: Vec<Param>,
@@ -434,6 +440,7 @@ pub struct FnDecl {
     pub body: Block,
     pub is_pub: bool,
     pub is_async: bool,
+    pub tool_annotation: Option<ToolAnnotation>,
     pub span: Span,
 }
 
