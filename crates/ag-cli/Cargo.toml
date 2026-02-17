@@ -1,0 +1,18 @@
+[package]
+name = "ag-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "asc"
+path = "src/main.rs"
+
+[dependencies]
+ag-ast = { path = "../ag-ast" }
+ag-lexer = { path = "../ag-lexer" }
+ag-parser = { path = "../ag-parser" }
+ag-checker = { path = "../ag-checker" }
+ag-codegen = { path = "../ag-codegen" }
+
+[dev-dependencies]
+tempfile = "3"

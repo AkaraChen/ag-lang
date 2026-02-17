@@ -1,0 +1,13 @@
+[package]
+name = "ag-codegen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ag-ast = { path = "../ag-ast" }
+swc_common = "18"
+swc_ecma_ast = "20"
+swc_ecma_codegen = "23"
+
+[dev-dependencies]
+ag-parser = { path = "../ag-parser" }

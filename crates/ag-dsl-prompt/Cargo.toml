@@ -1,0 +1,10 @@
+[package]
+name = "ag-dsl-prompt"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ag-dsl-core = { path = "../ag-dsl-core" }
+swc_common = "18"
+swc_ecma_ast = "20"
+swc_ecma_codegen = "23"

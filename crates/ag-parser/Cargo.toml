@@ -1,0 +1,8 @@
+[package]
+name = "ag-parser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ag-ast = { path = "../ag-ast" }
+ag-lexer = { path = "../ag-lexer" }
