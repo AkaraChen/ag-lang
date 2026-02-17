@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Lexer token types and tokenization rules for AgentScript.
+
+## Requirements
 
 ### Requirement: Token types
 

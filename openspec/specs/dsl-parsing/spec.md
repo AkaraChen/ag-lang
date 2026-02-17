@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Parser behavior for DSL block recognition and AST generation.
+
+## Requirements
 
 ### Requirement: DSL block triggered by top-level @
 

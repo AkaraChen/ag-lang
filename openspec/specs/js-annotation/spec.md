@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+`@js` annotation for binding AG declarations to JavaScript modules.
+
+## Requirements
 
 ### Requirement: Parser recognizes @js annotation syntax
 

@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Defines the code generation behavior for `@prompt` DSL blocks, including `PromptTemplate` constructor emission, role section compilation, capture translation, and runtime import generation.
+
+## Requirements
 
 ### Requirement: Implements DslHandler trait
 

@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Example application compilation and output validation.
+
+## Requirements
 
 ### Requirement: Example compiles without errors
 

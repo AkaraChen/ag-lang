@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+HTTP server stdlib for creating Hono-based web servers.
+
+## Requirements
 
 ### Requirement: App factory function creates Hono instance
 

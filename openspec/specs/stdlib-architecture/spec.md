@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Standard library module resolution and `std:` import handling.
+
+## Requirements
 
 ### Requirement: Compiler resolves std: module prefix
 

@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Lexer behavior for DSL block detection and token production.
+
+## Requirements
 
 ### Requirement: At-sign token emission
 

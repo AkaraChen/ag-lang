@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Node.js HTTP server runner for serving Hono applications.
+
+## Requirements
 
 ### Requirement: serve() function starts Node.js HTTP server
 

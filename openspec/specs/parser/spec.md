@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Parser rules for translating token streams into AgentScript AST.
+
+## Requirements
 
 ### Requirement: Module structure
 

@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Type mapping between AgentScript types and JavaScript types.
+
+## Requirements
 
 ### Requirement: Primitive type pass-through
 

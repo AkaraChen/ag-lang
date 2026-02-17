@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Defines the core types (`DslBlock`, `DslContent`, `DslPart`, `Span`) and traits (`DslHandler`, `CodegenContext`) shared by all DSL crates in the codegen pipeline.
+
+## Requirements
 
 ### Requirement: DslHandler trait definition
 

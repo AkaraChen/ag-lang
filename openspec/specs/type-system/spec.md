@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Type system with type checking, inference, and scope resolution.
+
+## Requirements
 
 ### Requirement: Symbol table with scoped resolution
 

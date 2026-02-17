@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+DslHandler trait and handler registration for DSL codegen dispatch.
+
+## Requirements
 
 ### Requirement: DslHandler trait
 

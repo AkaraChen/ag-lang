@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Lexer, parser, and validator for `@prompt` DSL blocks.
+
+## Requirements
 
 ### Requirement: Prompt lexer accepts DslPart input
 

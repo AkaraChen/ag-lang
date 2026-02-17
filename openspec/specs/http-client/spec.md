@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Defines the HTTP client standard library functions (`get`, `post`, `put`, `delete`, `patch`) for making HTTP requests from AgentScript applications.
+
+## Requirements
 
 ### Requirement: HTTP method convenience functions
 

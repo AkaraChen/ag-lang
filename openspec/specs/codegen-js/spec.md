@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Defines the JavaScript code generation rules for translating AgentScript AST nodes (declarations, expressions, statements, imports) into valid ES2020+ JavaScript via SWC.
+
+## Requirements
 
 ### Requirement: Variable declaration translation
 

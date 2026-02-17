@@ -1,4 +1,8 @@
-## ADDED Requirements
+## Purpose
+
+Extern function and struct declaration parsing and semantics.
+
+## Requirements
 
 ### Requirement: Lexer recognizes extern keyword
 
