@@ -1,10 +1,10 @@
 use std::any::Any;
 
 use ag_dsl_core::CodegenContext;
+use ag_dsl_core::swc_helpers::{ident, str_lit, expr_or_spread, make_prop};
 use crate::ast::*;
-use swc_common::DUMMY_SP;
+use swc_common::{SyntaxContext, DUMMY_SP};
 use swc_ecma_ast as swc;
-use swc_common::SyntaxContext;
 
 /// Generate JS AST for a prompt template.
 ///
@@ -287,7 +287,7 @@ pub fn generate_file_ref(name: &str, path: &str) -> Vec<swc::ModuleItem> {
 
 // ── Content expression builders ──────────────────────────────
 
-fn build_content_expr(
+pub fn build_content_expr(
     body: &[PromptPart],
     captures: &[&dyn Any],
     ctx: &mut dyn CodegenContext,
@@ -401,7 +401,7 @@ fn build_content_expr(
     })
 }
 
-fn build_output_schema(
+pub fn build_output_schema(
     kind: &OutputKind,
     captures: &[&dyn Any],
     ctx: &mut dyn CodegenContext,
@@ -449,7 +449,7 @@ fn build_output_schema(
     }
 }
 
-fn ag_type_to_json_schema(ty: &str) -> swc::Expr {
+pub fn ag_type_to_json_schema(ty: &str) -> swc::Expr {
     if ty.starts_with('[') && ty.ends_with(']') {
         let inner = &ty[1..ty.len() - 1];
         swc::Expr::Object(swc::ObjectLit {
@@ -474,7 +474,7 @@ fn ag_type_to_json_schema(ty: &str) -> swc::Expr {
     }
 }
 
-fn build_constraints_expr(constraints: &Constraints) -> swc::Expr {
+pub fn build_constraints_expr(constraints: &Constraints) -> swc::Expr {
     let props: Vec<swc::PropOrSpread> = constraints
         .fields
         .iter()
@@ -487,7 +487,7 @@ fn build_constraints_expr(constraints: &Constraints) -> swc::Expr {
     })
 }
 
-fn constraint_value_to_expr(value: &ConstraintValue) -> swc::Expr {
+pub fn constraint_value_to_expr(value: &ConstraintValue) -> swc::Expr {
     match value {
         ConstraintValue::Number(n) => swc::Expr::Lit(swc::Lit::Num(swc::Number {
             span: DUMMY_SP,
@@ -509,69 +509,9 @@ fn constraint_value_to_expr(value: &ConstraintValue) -> swc::Expr {
     }
 }
 
-// ── Helpers ──────────────────────────────────────────────────
+// ── Helpers (from ag_dsl_core::swc_helpers) ──────────────────
 
-fn ident(name: &str) -> swc::Ident {
-    swc::Ident {
-        span: DUMMY_SP,
-        ctxt: SyntaxContext::empty(),
-        sym: name.into(),
-        optional: false,
-    }
-}
-
-fn str_lit(s: &str) -> swc::Expr {
-    swc::Expr::Lit(swc::Lit::Str(swc::Str {
-        span: DUMMY_SP,
-        value: s.into(),
-        raw: None,
-    }))
-}
-
-fn expr_or_spread(expr: swc::Expr) -> swc::ExprOrSpread {
-    swc::ExprOrSpread {
-        spread: None,
-        expr: Box::new(expr),
-    }
-}
-
-fn make_prop(key: &str, value: swc::Expr) -> swc::PropOrSpread {
-    swc::PropOrSpread::Prop(Box::new(swc::Prop::KeyValue(swc::KeyValueProp {
-        key: swc::PropName::Ident(swc::IdentName {
-            span: DUMMY_SP,
-            sym: key.into(),
-        }),
-        value: Box::new(value),
-    })))
-}
-
-// ── Emit helper for tests ────────────────────────────────────
-
-pub fn emit_module(items: &[swc::ModuleItem]) -> String {
-    use swc_common::sync::Lrc;
-    use swc_common::SourceMap;
-    use swc_ecma_codegen::text_writer::JsWriter;
-    use swc_ecma_codegen::Emitter;
-
-    let module = swc::Module {
-        span: DUMMY_SP,
-        body: items.to_vec(),
-        shebang: None,
-    };
-
-    let cm: Lrc<SourceMap> = Lrc::new(SourceMap::default());
-    let mut buf = Vec::new();
-    {
-        let mut emitter = Emitter {
-            cfg: swc_ecma_codegen::Config::default(),
-            cm: cm.clone(),
-            comments: None,
-            wr: JsWriter::new(cm, "\n", &mut buf, None),
-        };
-        emitter.emit_module(&module).unwrap();
-    }
-    String::from_utf8(buf).unwrap()
-}
+pub use ag_dsl_core::swc_helpers::emit_module;
 
 #[cfg(test)]
 mod tests {

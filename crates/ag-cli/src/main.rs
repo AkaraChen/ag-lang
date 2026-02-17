@@ -73,7 +73,7 @@ fn cmd_build(args: &[String]) {
     }
 
     // Codegen
-    let js = ag_codegen::codegen(&module);
+    let js = ag_codegen::codegen_with_tools(&module, checked.tool_registry);
 
     if let Err(e) = fs::write(&output_path, &js) {
         eprintln!("error: cannot write '{}': {}", output_path, e);

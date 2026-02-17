@@ -19,6 +19,22 @@ const greeting = new PromptTemplate({
 function lookup_docs(topic) {
     return `Documentation for: ${topic}`;
 }
+lookup_docs.schema = {
+    name: "lookup_docs",
+    description: "Look up documentation for a given topic",
+    parameters: {
+        type: "object",
+        properties: {
+            topic: {
+                type: "string"
+            }
+        },
+        required: [
+            "topic"
+        ],
+        additionalProperties: false
+    }
+};
 function calculate(op, a, b) {
     return (()=>{
         const _match = op;
@@ -35,6 +51,30 @@ function calculate(op, a, b) {
         }
     })();
 }
+calculate.schema = {
+    name: "calculate",
+    description: "Calculate a math expression",
+    parameters: {
+        type: "object",
+        properties: {
+            op: {
+                type: "string"
+            },
+            a: {
+                type: "number"
+            },
+            b: {
+                type: "number"
+            }
+        },
+        required: [
+            "op",
+            "a",
+            "b"
+        ],
+        additionalProperties: false
+    }
+};
 function format_result(value) {
     return (()=>{
         const _match = value;

@@ -5,8 +5,11 @@ edition = "2024"
 
 [dependencies]
 ag-ast = { path = "../ag-ast" }
+ag-checker = { path = "../ag-checker" }
+ag-dsl-agent = { path = "../ag-dsl-agent" }
 ag-dsl-core = { path = "../ag-dsl-core" }
 ag-dsl-prompt = { path = "../ag-dsl-prompt" }
+ag-dsl-server = { path = "../ag-dsl-server" }
 swc_common = "18"
 swc_ecma_ast = "20"
 swc_ecma_codegen = "23"

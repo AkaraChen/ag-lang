@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 ag-dsl-core = { path = "../ag-dsl-core" }
 ag-dsl-prompt = { path = "../ag-dsl-prompt" }
+swc_common = "18"
+swc_ecma_ast = "20"

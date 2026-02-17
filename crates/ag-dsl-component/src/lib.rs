@@ -1,3 +1,5 @@
+pub mod validator;
+
 use ag_dsl_core::{DslError, DslPart};
 use swc_common::{
     comments::{Comments, SingleThreadedComments},

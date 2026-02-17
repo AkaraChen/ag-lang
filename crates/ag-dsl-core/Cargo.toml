@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 swc_ecma_ast = "20"
+swc_common = "18"
+swc_ecma_codegen = "23"

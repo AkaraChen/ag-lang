@@ -1,4 +1,5 @@
 use ag_ast::*;
+use ag_dsl_core::DslPart as CoreDslPart;
 use std::collections::HashMap;
 
 // ── Type representation ────────────────────────────────────
@@ -282,11 +283,207 @@ impl Checker {
     }
 
     fn check_dsl_block(&mut self, dsl: &DslBlock) {
+        // Always type-check capture expressions
         if let DslContent::Inline { parts } = &dsl.content {
             for part in parts {
-                if let DslPart::Capture(expr, _) = part {
+                if let ag_ast::DslPart::Capture(expr, _) = part {
                     self.check_expr(expr);
                 }
+            }
+        }
+
+        // Only run DSL-internal validation for inline blocks
+        let DslContent::Inline { parts } = &dsl.content else {
+            return;
+        };
+
+        // Convert ag_ast::DslPart to ag_dsl_core::DslPart for DSL lexers
+        let core_parts: Vec<CoreDslPart> = parts
+            .iter()
+            .map(|p| match p {
+                ag_ast::DslPart::Text(s, span) => CoreDslPart::Text(
+                    s.clone(),
+                    ag_dsl_core::Span::new(span.start, span.end),
+                ),
+                ag_ast::DslPart::Capture(expr, span) => {
+                    let boxed: Box<dyn std::any::Any> = Box::new((**expr).clone());
+                    CoreDslPart::Capture(
+                        boxed,
+                        ag_dsl_core::Span::new(span.start, span.end),
+                    )
+                }
+            })
+            .collect();
+
+        match dsl.kind.as_str() {
+            "prompt" => self.check_dsl_prompt(&core_parts, dsl),
+            "agent" => self.check_dsl_agent(&core_parts, dsl),
+            "skill" => self.check_dsl_skill(&core_parts, dsl),
+            "server" => self.check_dsl_server(&core_parts, dsl),
+            "component" => self.check_dsl_component(parts, dsl),
+            _ => {} // Unknown kinds are silently skipped
+        }
+    }
+
+    fn check_dsl_prompt(&mut self, parts: &[CoreDslPart], dsl: &DslBlock) {
+        let tokens = ag_dsl_prompt::lexer::lex(parts);
+        match ag_dsl_prompt::parser::parse(&dsl.name.name, &tokens) {
+            Ok(template) => {
+                let diags = ag_dsl_prompt::validator::validate(&template);
+                for d in diags {
+                    if d.severity == ag_dsl_prompt::parser::Severity::Error {
+                        self.error(d.message, dsl.span);
+                    }
+                }
+            }
+            Err(diags) => {
+                for d in diags {
+                    self.error(d.message, dsl.span);
+                }
+            }
+        }
+    }
+
+    fn check_dsl_agent(&mut self, parts: &[CoreDslPart], dsl: &DslBlock) {
+        let tokens = ag_dsl_agent::lexer::lex(parts);
+        match ag_dsl_agent::parser::parse(&dsl.name.name, &tokens) {
+            Ok(template) => {
+                let diags = ag_dsl_agent::validator::validate(&template);
+                for d in diags {
+                    if d.severity == ag_dsl_agent::validator::Severity::Error {
+                        self.error(d.message, dsl.span);
+                    }
+                }
+            }
+            Err(diags) => {
+                for d in diags {
+                    self.error(d.message, dsl.span);
+                }
+            }
+        }
+    }
+
+    fn check_dsl_skill(&mut self, parts: &[CoreDslPart], dsl: &DslBlock) {
+        let tokens = ag_dsl_skill::lexer::lex(parts);
+        match ag_dsl_skill::parser::parse(&tokens, &dsl.name.name) {
+            Ok(template) => {
+                let diags = ag_dsl_skill::validator::validate(&template);
+                for d in diags {
+                    if d.severity == ag_dsl_skill::validator::Severity::Error {
+                        self.error(d.message, dsl.span);
+                    }
+                }
+                // Validate skill field type names against checker scope
+                self.validate_skill_field_types(&template, dsl.span);
+            }
+            Err(diags) => {
+                for d in diags {
+                    self.error(d.message, dsl.span);
+                }
+            }
+        }
+    }
+
+    fn check_dsl_server(&mut self, parts: &[CoreDslPart], dsl: &DslBlock) {
+        let tokens = ag_dsl_server::lexer::lex(parts);
+        match ag_dsl_server::parser::parse(&tokens, &dsl.name.name) {
+            Ok(template) => {
+                let diags = ag_dsl_server::validator::validate(&template);
+                for d in diags {
+                    if d.severity == ag_dsl_server::validator::Severity::Error {
+                        self.error(d.message, dsl.span);
+                    }
+                }
+            }
+            Err(diags) => {
+                for d in diags {
+                    self.error(d.message, dsl.span);
+                }
+            }
+        }
+    }
+
+    fn check_dsl_component(&mut self, parts: &[ag_ast::DslPart], dsl: &DslBlock) {
+        // Component uses ag_dsl_core::DslPart directly for parse_component
+        let core_parts: Vec<CoreDslPart> = parts
+            .iter()
+            .map(|p| match p {
+                ag_ast::DslPart::Text(s, span) => CoreDslPart::Text(
+                    s.clone(),
+                    ag_dsl_core::Span::new(span.start, span.end),
+                ),
+                ag_ast::DslPart::Capture(expr, span) => {
+                    let boxed: Box<dyn std::any::Any> = Box::new((**expr).clone());
+                    CoreDslPart::Capture(
+                        boxed,
+                        ag_dsl_core::Span::new(span.start, span.end),
+                    )
+                }
+            })
+            .collect();
+        match ag_dsl_component::parse_component(&dsl.name.name, &core_parts) {
+            Ok(meta) => {
+                let diags = ag_dsl_component::validator::validate(&meta);
+                for d in diags {
+                    if d.severity == ag_dsl_component::validator::Severity::Error {
+                        self.error(d.message, dsl.span);
+                    }
+                }
+            }
+            Err(e) => {
+                self.error(e.message, dsl.span);
+            }
+        }
+    }
+
+    // ── Skill type validation ────────────────────────────────
+
+    fn validate_skill_field_types(
+        &mut self,
+        template: &ag_dsl_skill::ast::SkillTemplate,
+        span: Span,
+    ) {
+        for field in &template.input_fields {
+            if !self.is_valid_type_name(&field.type_name) {
+                self.error(
+                    format!(
+                        "skill input field `{}` has unresolvable type `{}`",
+                        field.name, field.type_name
+                    ),
+                    span,
+                );
+            }
+        }
+        for field in &template.output_fields {
+            if !self.is_valid_type_name(&field.type_name) {
+                self.error(
+                    format!(
+                        "skill output field `{}` has unresolvable type `{}`",
+                        field.name, field.type_name
+                    ),
+                    span,
+                );
+            }
+        }
+    }
+
+    fn is_valid_type_name(&self, name: &str) -> bool {
+        match name {
+            "str" | "num" | "int" | "bool" | "nil" | "any" => true,
+            _ => {
+                // Check array syntax: [T]
+                if name.starts_with('[') && name.ends_with(']') {
+                    let inner = &name[1..name.len() - 1];
+                    return self.is_valid_type_name(inner);
+                }
+                // Check type aliases and scope
+                if self.type_aliases.contains_key(name) {
+                    return true;
+                }
+                if self.scope.lookup(name).is_some() {
+                    return true;
+                }
+                false
             }
         }
     }
@@ -1194,5 +1391,127 @@ mod tests {
         let result = check_full("fn helper(x: int) -> int { x + 1 }");
         assert!(result.diagnostics.is_empty(), "errors: {:?}", result.diagnostics);
         assert!(result.tool_registry.is_empty());
+    }
+
+    // ── DSL internal validation tests ──
+
+    #[test]
+    fn dsl_prompt_empty_error() {
+        assert_has_error(
+            "@prompt p <<EOF\n\nEOF\n",
+            "empty prompt",
+        );
+    }
+
+    #[test]
+    fn dsl_server_port_zero_error() {
+        assert_has_error(
+            "@server app <<EOF\n@port 0\n@get / #{ handler }\nEOF\n",
+            "port",
+        );
+    }
+
+    #[test]
+    fn dsl_server_duplicate_routes_error() {
+        assert_has_error(
+            "@server app <<EOF\n@get / #{ h1 }\n@get / #{ h2 }\nEOF\n",
+            "duplicate route",
+        );
+    }
+
+    #[test]
+    fn dsl_agent_duplicate_hooks_error() {
+        assert_has_error(
+            "@agent bot <<EOF\n@role system\nHello\n@on init #{ h1 }\n@on init #{ h2 }\nEOF\n",
+            "duplicate",
+        );
+    }
+
+    #[test]
+    fn dsl_skill_missing_description_error() {
+        assert_has_error(
+            "@skill s <<EOF\n@input { name: str }\n@steps\ndo something\nEOF\n",
+            "description",
+        );
+    }
+
+    #[test]
+    fn dsl_skill_missing_input_error() {
+        assert_has_error(
+            "@skill s <<EOF\n@description \"test\"\n@steps\ndo something\nEOF\n",
+            "input",
+        );
+    }
+
+    #[test]
+    fn dsl_component_duplicate_props_error() {
+        assert_has_error(
+            "@component c <<EOF\n/**\n * @param {string} x\n * @param {number} x\n */\nexport default function C({ x }) { return <div/> }\nEOF\n",
+            "duplicate prop",
+        );
+    }
+
+    #[test]
+    fn dsl_capture_still_typechecked_with_validation() {
+        // Capture type-checking should happen alongside DSL validation
+        assert_has_error(
+            "@prompt sys <<EOF\n@role system\n#{undefined_var}\nEOF\n",
+            "undefined variable",
+        );
+    }
+
+    #[test]
+    fn dsl_fileref_skipped() {
+        // FileRef blocks should not cause errors during checking
+        assert_no_errors(
+            r#"@prompt sys from "./system-prompt.txt""#,
+        );
+    }
+
+    #[test]
+    fn dsl_unknown_kind_skipped() {
+        // Unknown DSL kinds should be silently skipped
+        assert_no_errors(
+            "@graphql q <<EOF\nquery { users }\nEOF\n",
+        );
+    }
+
+    // ── Skill type validation tests ──
+
+    #[test]
+    fn skill_primitive_types_pass() {
+        assert_no_errors(
+            "@skill s <<EOF\n@description \"test\"\n@input { name: str, count: int, flag: bool }\n@steps\ndo thing\nEOF\n",
+        );
+    }
+
+    #[test]
+    fn skill_array_types_pass() {
+        assert_no_errors(
+            "@skill s <<EOF\n@description \"test\"\n@input { items: [str] }\n@steps\ndo thing\nEOF\n",
+        );
+    }
+
+    #[test]
+    fn skill_unknown_type_error() {
+        assert_has_error(
+            "@skill s <<EOF\n@description \"test\"\n@input { data: UnknownType }\n@steps\ndo thing\nEOF\n",
+            "unresolvable type",
+        );
+    }
+
+    #[test]
+    fn skill_struct_type_passes() {
+        // A struct declared in scope should be resolvable
+        assert_no_errors(
+            "struct User { name: str }\n@skill s <<EOF\n@description \"test\"\n@input { user: User }\n@steps\ndo thing\nEOF\n",
+        );
+    }
+
+    #[test]
+    fn skill_type_alias_passes() {
+        assert_no_errors(
+            "type ID = str\n@skill s <<EOF\n@description \"test\"\n@input { id: ID }\n@steps\ndo thing\nEOF\n",
+        );
     }
 }

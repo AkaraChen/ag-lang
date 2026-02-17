@@ -1,7 +1,11 @@
+mod tool_schema;
+
 use std::any::Any;
 use std::collections::HashMap;
 
 use ag_ast::*;
+use ag_checker::ToolInfo;
+use ag_dsl_core::swc_helpers::{ident, binding_ident, expr_or_spread};
 use swc_common::sync::Lrc;
 use swc_common::{SourceMap, SyntaxContext, DUMMY_SP};
 use swc_ecma_ast as swc;
@@ -80,13 +84,19 @@ fn convert_dsl_block(dsl: &ag_ast::DslBlock) -> ag_dsl_core::DslBlock {
 
 pub struct Translator {
     handlers: HashMap<String, Box<dyn ag_dsl_core::DslHandler>>,
+    tool_registry: HashMap<String, ToolInfo>,
 }
 
 impl Translator {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
+            tool_registry: HashMap::new(),
         }
+    }
+
+    pub fn set_tool_registry(&mut self, registry: HashMap<String, ToolInfo>) {
+        self.tool_registry = registry;
     }
 
     pub fn register_dsl_handler(&mut self, kind: &str, handler: Box<dyn ag_dsl_core::DslHandler>) {
@@ -210,7 +220,7 @@ impl Translator {
                     }
                 }
                 other => {
-                    translate_item_into(other, &mut body);
+                    translate_item_into(other, &mut body, &self.tool_registry);
                 }
             }
         }
@@ -324,6 +334,34 @@ pub fn codegen(module: &Module) -> String {
         "prompt",
         Box::new(ag_dsl_prompt::handler::PromptDslHandler),
     );
+    translator.register_dsl_handler(
+        "agent",
+        Box::new(ag_dsl_agent::handler::AgentDslHandler),
+    );
+    translator.register_dsl_handler(
+        "server",
+        Box::new(ag_dsl_server::handler::ServerDslHandler),
+    );
+    translator.codegen(module).unwrap_or_else(|e| {
+        panic!("codegen error: {}", e.message)
+    })
+}
+
+pub fn codegen_with_tools(module: &Module, tool_registry: HashMap<String, ToolInfo>) -> String {
+    let mut translator = Translator::new();
+    translator.set_tool_registry(tool_registry);
+    translator.register_dsl_handler(
+        "prompt",
+        Box::new(ag_dsl_prompt::handler::PromptDslHandler),
+    );
+    translator.register_dsl_handler(
+        "agent",
+        Box::new(ag_dsl_agent::handler::AgentDslHandler),
+    );
+    translator.register_dsl_handler(
+        "server",
+        Box::new(ag_dsl_server::handler::ServerDslHandler),
+    );
     translator.codegen(module).unwrap_or_else(|e| {
         panic!("codegen error: {}", e.message)
     })
@@ -346,36 +384,13 @@ fn emit(module: &swc::Module) -> String {
 
 // ── Helpers ────────────────────────────────────────────────
 
-fn ident(name: &str) -> swc::Ident {
-    swc::Ident {
-        span: DUMMY_SP,
-        ctxt: SyntaxContext::empty(),
-        sym: name.into(),
-        optional: false,
-    }
-}
-
-fn binding_ident(name: &str) -> swc::BindingIdent {
-    swc::BindingIdent {
-        id: ident(name),
-        type_ann: None,
-    }
-}
-
-fn expr_or_spread(expr: swc::Expr) -> swc::ExprOrSpread {
-    swc::ExprOrSpread {
-        spread: None,
-        expr: Box::new(expr),
-    }
-}
-
 fn stmt_to_module_item(stmt: swc::Stmt) -> swc::ModuleItem {
     swc::ModuleItem::Stmt(stmt)
 }
 
 // ── Module translation ─────────────────────────────────────
 
-fn translate_item_into(item: &Item, body: &mut Vec<swc::ModuleItem>) {
+fn translate_item_into(item: &Item, body: &mut Vec<swc::ModuleItem>, tool_registry: &HashMap<String, ToolInfo>) {
     match item {
         Item::FnDecl(f) => {
             if f.is_pub {
@@ -389,6 +404,35 @@ fn translate_item_into(item: &Item, body: &mut Vec<swc::ModuleItem>) {
                 body.push(stmt_to_module_item(swc::Stmt::Decl(swc::Decl::Fn(
                     translate_fn_decl(f),
                 ))));
+            }
+            // Emit tool schema if this is a @tool function
+            if f.tool_annotation.is_some() {
+                if let Some(info) = tool_registry.get(&f.name) {
+                    let schema_expr = tool_schema::build_tool_schema(
+                        &f.name,
+                        &info.description,
+                        &info.param_types,
+                    );
+                    // fnName.schema = { ... }
+                    body.push(stmt_to_module_item(swc::Stmt::Expr(swc::ExprStmt {
+                        span: DUMMY_SP,
+                        expr: Box::new(swc::Expr::Assign(swc::AssignExpr {
+                            span: DUMMY_SP,
+                            op: swc::AssignOp::Assign,
+                            left: swc::AssignTarget::Simple(swc::SimpleAssignTarget::Member(
+                                swc::MemberExpr {
+                                    span: DUMMY_SP,
+                                    obj: Box::new(swc::Expr::Ident(ident(&f.name))),
+                                    prop: swc::MemberProp::Ident(swc::IdentName {
+                                        span: DUMMY_SP,
+                                        sym: "schema".into(),
+                                    }),
+                                },
+                            )),
+                            right: Box::new(schema_expr),
+                        })),
+                    })));
+                }
             }
         }
         Item::VarDecl(v) => {
@@ -1491,5 +1535,96 @@ mod tests {
         // Expr::Block → block_to_expr → IIFE: (()=>{ let x = 1; return x + 1; })()
         assert!(js.contains("x = 1"), "IIFE should contain the let statement");
         assert!(js.contains("return"), "IIFE should have implicit return for tail expression");
+    }
+
+    fn compile_with_tools(src: &str) -> String {
+        let parsed = ag_parser::parse(src);
+        assert!(
+            parsed.diagnostics.is_empty(),
+            "parse errors: {:?}",
+            parsed.diagnostics
+        );
+        let checked = ag_checker::check(&parsed.module);
+        codegen_with_tools(&parsed.module, checked.tool_registry)
+    }
+
+    #[test]
+    fn tool_fn_emits_schema() {
+        let js = compile_with_tools(
+            r#"@tool("Look up docs") fn lookup_docs(topic: str) -> str { topic }"#,
+        );
+        assert!(js.contains("lookup_docs.schema"), "should emit schema assignment");
+        assert!(js.contains(r#""lookup_docs""#), "schema should contain fn name");
+        assert!(js.contains(r#""Look up docs""#), "schema should contain description");
+        assert!(js.contains("parameters"), "schema should have parameters");
+        assert!(js.contains("topic"), "schema should contain param name");
+        assert!(js.contains(r#""string""#), "topic should map to string");
+    }
+
+    #[test]
+    fn tool_fn_without_description() {
+        let js = compile_with_tools(
+            r#"@tool fn add(a: num, b: num) -> num { a + b }"#,
+        );
+        assert!(js.contains("add.schema"), "should emit schema assignment");
+        assert!(js.contains(r#""number""#), "num params should map to number");
+    }
+
+    #[test]
+    fn tool_fn_optional_params() {
+        let js = compile_with_tools(
+            r#"@tool fn search(query: str, limit: int?) -> str { query }"#,
+        );
+        assert!(js.contains("search.schema"), "should emit schema assignment");
+        assert!(js.contains("query"));
+        assert!(js.contains("limit"));
+    }
+
+    #[test]
+    fn non_tool_fn_no_schema() {
+        let js = compile_with_tools(
+            r#"fn helper(x: str) -> str { x }"#,
+        );
+        assert!(!js.contains(".schema"), "non-tool fn should not have schema");
+    }
+
+    #[test]
+    fn agent_block_compiles() {
+        let js = compile("@agent my_agent <<EOF\n@role system\nYou are helpful.\nEOF\n");
+        assert!(js.contains("AgentRuntime"), "should import AgentRuntime");
+        assert!(js.contains("@agentscript/runtime"), "should import from runtime");
+        assert!(js.contains("my_agent"), "should declare agent variable");
+        assert!(js.contains("system"), "should have system role");
+    }
+
+    #[test]
+    fn agent_and_prompt_together() {
+        let js = compile(
+            "@prompt sys <<EOF\n@role system\nHi\nEOF\n\n@agent bot <<EOF\n@role system\nHello\nEOF\n",
+        );
+        assert!(js.contains("PromptTemplate"), "should have prompt import");
+        assert!(js.contains("AgentRuntime"), "should have agent import");
+        assert!(js.contains("sys"), "should declare prompt");
+        assert!(js.contains("bot"), "should declare agent");
+    }
+
+    #[test]
+    fn server_block_compiles() {
+        let js = compile("@server app <<EOF\n@port 3000\n@get / #{ handler }\nEOF\n");
+        assert!(js.contains("Hono"), "should import Hono");
+        assert!(js.contains("serve"), "should import serve");
+        assert!(js.contains("app"), "should declare server variable");
+        assert!(js.contains("3000"), "should have port");
+    }
+
+    #[test]
+    fn server_and_prompt_together() {
+        let js = compile(
+            "@prompt sys <<EOF\n@role system\nHi\nEOF\n\n@server api <<EOF\n@port 8080\n@get / #{ handler }\nEOF\n",
+        );
+        assert!(js.contains("PromptTemplate"), "should have prompt import");
+        assert!(js.contains("Hono"), "should have Hono import");
+        assert!(js.contains("sys"), "should declare prompt");
+        assert!(js.contains("api"), "should declare server");
     }
 }

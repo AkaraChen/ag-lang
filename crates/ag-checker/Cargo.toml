@@ -5,6 +5,12 @@ edition = "2024"
 
 [dependencies]
 ag-ast = { path = "../ag-ast" }
+ag-dsl-core = { path = "../ag-dsl-core" }
+ag-dsl-prompt = { path = "../ag-dsl-prompt" }
+ag-dsl-agent = { path = "../ag-dsl-agent" }
+ag-dsl-skill = { path = "../ag-dsl-skill" }
+ag-dsl-server = { path = "../ag-dsl-server" }
+ag-dsl-component = { path = "../ag-dsl-component" }
 
 [dev-dependencies]
 ag-parser = { path = "../ag-parser" }
