@@ -1,6 +1,6 @@
-# AgentScript Language Specification v0.1
+# AgentScript Language Specification v0.2
 
-> A purpose-built language for authoring AI agents — with first-class primitives for prompts, tools, skills, components, and HTTP serving.
+> A purpose-built language for authoring AI agents — with first-class DSL blocks for prompts, agents, skills, components, and HTTP serving; annotations for tool metadata and JS interop; and a familiar JS-flavored core language.
 
 ---
 
@@ -10,7 +10,8 @@
 |-----------|-----------|
 | **JS-flavored, shorter keywords** | Familiar to web devs, less visual noise |
 | **LL(1) grammar, recursive descent** | Simple compiler front-end, no parser generator needed |
-| **Agent-first primitives** | `agent`, `tool`, `skill`, `component`, `prompt` are keywords, not library patterns |
+| **Extensible DSL blocks** | `@prompt`, `@agent`, `@skill`, `@component`, `@server` — domain constructs as DSL, not keywords |
+| **Annotation system** | `@tool`, `@js` — metadata on declarations, not new syntax |
 | **Structural typing + basic inference** | Enough type safety to catch wiring bugs; no generics gymnastics |
 | **Compiles to Node.js bundle** | Instant production readiness; other languages access via HTTP/SDK |
 
@@ -21,15 +22,16 @@
 ### 2.1 Keywords (reserved)
 
 ```
-agent    tool     skill    component  prompt
 fn       let      const    mut        if
 else     for      in       of         while
 match    ret      yield    await      async
 import   export   from     as         type
 struct   enum     impl     pub        self
-true     false    nil      http       route
-emit     use      with     on         _
+true     false    nil      extern     try
+catch    emit     use      with       on       _
 ```
+
+> **Note:** `agent`, `tool`, `skill`, `component`, `prompt`, `server` are **not** keywords. They are identifiers used as DSL kind names or annotation names (e.g., `@agent`, `@tool`). This keeps the keyword set small and the DSL system open to extension.
 
 ### 2.2 Operators & Punctuation
 
@@ -40,11 +42,11 @@ emit     use      with     on         _
 |> ?? ?.                   // pipe, nullish coalesce, optional chain
 =  +=  -=  *=  /=         // assignment
 => -> ::                   // fat arrow, thin arrow (return type), scope resolution
-@                          // decorator / annotation
-#                          // prompt interpolation
+@                          // DSL block prefix / annotation prefix
+#                          // DSL capture prefix (inside DSL blocks)
 { } ( ) [ ] < >           // grouping
 , ; : .                    // delimiters
-..  ...                    // range, spread
+..  ...                    // range, spread / variadic
 ```
 
 ### 2.3 Comments
@@ -63,23 +65,59 @@ emit     use      with     on         _
 `hello ${name}`             // template string (JS-style interpolation)
 ```
 
-### 2.5 Prompt Literals (new!)
+### 2.5 DSL Block System
 
-Triple-backtick blocks are **prompt literals** — a DSL for structured LLM instructions:
+DSL blocks are **top-level declarations** for domain-specific content — prompts, agents, skills, components, servers, and any future DSL kind.
+
+#### Syntax
 
 ```
-let system = ```
+@<kind> <name> ```
+  ... DSL content ...
+```
+```
+
+Or file reference form:
+
+```
+@<kind> <name> from "<path>"
+```
+
+- `<kind>` — any identifier (e.g., `prompt`, `agent`, `skill`, `component`, `server`, `graphql`, ...)
+- `<name>` — the binding name for the compiled output
+- The triple-backtick block enters **raw mode** — content is not tokenized as AG code
+
+#### Captures
+
+Inside DSL blocks, `#{ expr }` captures an AgentScript expression (evaluated at runtime):
+
+```
+@prompt greeting ```
+  Hello, #{user.name}! You have #{messages.len()} new messages.
+```
+```
+
+Captures can contain any AG expression — identifiers, member access, function calls, arithmetic:
+
+```
+@prompt summary ```
+  Total items: #{cart.items.len()}
+  Subtotal: #{format_currency(cart.total())}
+```
+```
+
+> **Future:** Statement block captures (`#{ ... stmts ... }`) are planned for DSL blocks that need executable code (e.g., route handlers in `@server`).
+
+#### Directives
+
+Inside DSL blocks, `@keyword` at the start of a line is a **directive** — metadata parsed by the DSL handler:
+
+```
+@prompt system_prompt ```
   @role system
-  @model gpt-4o | claude-3.5-sonnet
+  @model claude-sonnet | gpt-4o
 
   You are a helpful coding assistant.
-
-  ## Context
-  The user is working on: #{project.description}
-
-  ## Rules
-  - Always respond in #{lang}
-  - Keep responses under #{max_tokens} tokens
 
   @examples {
     user: "Fix this bug"
@@ -91,11 +129,46 @@ let system = ```
     max_tokens: 2048
   }
 ```
+```
 
-Inside prompt literals:
-- `#{ expr }` — expression interpolation (evaluated at runtime)
-- `@keyword` — prompt metadata directives
-- Everything else is verbatim text sent to the model
+Each DSL kind defines its own set of valid directives. The prompt DSL supports: `@role`, `@model`, `@examples`, `@output`, `@constraints`, `@messages`.
+
+#### Extensibility
+
+The DSL system is **open** — any `@kind` identifier is accepted by the parser. A registered `DslHandler` processes the block during codegen. Unregistered kinds produce a compile error. This means new domain constructs (e.g., `@graphql`, `@workflow`, `@test`) can be added without language changes.
+
+### 2.6 Annotations
+
+Annotations decorate declarations with metadata. They use the same `@` prefix as DSL blocks, but are followed by a declaration (not a name + backticks):
+
+```javascript
+// @tool marks a function as an LLM-callable tool
+@tool
+fn read_file(path: str) -> str | Error {
+  await fs.read(path)
+}
+
+// @js binds an extern declaration to a JavaScript module
+@js("node:fs/promises")
+extern fn readFile(path: str, encoding: str) -> Promise<str>
+
+// @js with rename
+@js("node:path", name = "join")
+extern fn path_join(parts: ...str) -> str
+```
+
+**Disambiguation:** When the parser sees `@`, it looks ahead:
+- `@ IDENT IDENT (``` | from)` → DSL block
+- `@ IDENT ( "(" args ")" )? declaration` → Annotation on the following declaration
+
+Built-in annotations:
+
+| Annotation | Applies To | Purpose |
+|------------|-----------|---------|
+| `@tool` | `fn` | Marks function as an LLM-callable tool; auto-generates JSON Schema |
+| `@tool("description")` | `fn` | Same, with inline description (overrides doc comment) |
+| `@js("module")` | `extern fn/struct/type` | Specifies the JavaScript module to import from |
+| `@js("module", name = "jsName")` | `extern fn/struct/type` | Same, with JS-side name remapping |
 
 ---
 
@@ -120,6 +193,7 @@ any        // escape hatch, minimal checking
 (str, num) -> bool          // function type
 str?                        // nullable / optional (sugar for str | nil)
 str | num                   // union type
+Promise<T>                  // async result (built-in generic)
 ```
 
 ### 3.3 Struct Types
@@ -171,6 +245,7 @@ The type checker is **basic and intentionally limited**:
 - **Explicit annotation required** for function params and return types
 - **`any` suppresses checking** for that binding
 - **Union narrowing** via `match` and `if` type guards
+- **Int-to-num widening**: `int` is assignable to `num`
 
 ---
 
@@ -257,120 +332,207 @@ match response {
 
 ---
 
-## 5. Agent System (Core Primitive)
+## 5. Extern Declarations
 
-### 5.1 Agent Declaration
+Extern declarations declare **JavaScript bindings** — types and functions that exist in JS but need to be known to the AG type checker. They produce no runtime code (erased during codegen).
+
+### 5.1 Extern Functions
 
 ```javascript
-/// A coding assistant that can read and write files.
-/// @version 1.0
-agent Coder {
-  /// The system prompt — uses prompt DSL
-  prompt = ```
-    @role system
-    You are an expert software engineer.
+// Global JS function (no @js annotation → assumed globally available)
+extern fn fetch(input: str, init: RequestInit?) -> Promise<Response>
 
-    ## Your capabilities
-    You can read files, write code, and run tests.
+// Function from a JS module
+@js("node:fs/promises")
+extern fn readFile(path: str, encoding: str) -> Promise<str>
 
-    ## Style
-    - Be concise
-    - Prefer #{self.preferred_lang} idioms
-    - Always explain your reasoning
+// Renamed import: AG name differs from JS name
+@js("node:path", name = "join")
+extern fn path_join(parts: ...str) -> str
 
-    @constraints {
-      model: "claude-sonnet-4-20250514"
-      temperature: 0.3
-      max_tokens: 4096
-    }
-  ```
+// Variadic parameters: ...T as the last parameter
+extern fn console_log(args: ...any) -> nil
+```
 
-  /// Agent-level state
-  preferred_lang: str = "TypeScript"
-  context_window: int = 128000
+### 5.2 Extern Structs
 
-  /// Tools this agent can use
-  use read_file
-  use write_file
-  use run_tests
-  use web_search
+Extern structs declare JavaScript objects/classes with known fields and methods:
 
-  /// Skills (compound tool sequences)
-  use refactor_skill
-  use debug_skill
-
-  /// Lifecycle hooks
-  on init(ctx: AgentContext) {
-    log.info("Coder agent initialized for session ${ctx.session_id}")
-  }
-
-  on message(msg: UserMessage) -> AgentResponse {
-    // Custom pre/post processing around the LLM call
-    let enriched = enrich_context(msg, self.context_window)
-    let response = await self.complete(enriched)
-    response
-  }
-
-  on error(e: Error) {
-    log.error("Agent error: ${e.msg}")
-    emit event::agent_error(e)
-  }
+```javascript
+@js("@agentscript/stdlib/http/server")
+extern struct Context {
+  req: HonoRequest
+  fn text(text: str) -> Response
+  fn json(data: any) -> Response
+  fn html(html: str) -> Response
+  fn redirect(url: str) -> Response
+  fn header(name: str, value: str)
+  fn status(code: int)
 }
 ```
 
-### 5.2 Agent Composition
+Fields are type-checked on access. Methods have signatures but no body.
+
+### 5.3 Extern Types (Opaque)
+
+Extern types declare names the compiler knows about but cannot inspect:
 
 ```javascript
-/// Orchestrator that delegates to sub-agents
-agent TeamLead {
-  prompt = ```
-    @role system
-    You coordinate a team of specialist agents.
-    Delegate tasks to the right agent based on the request.
-  ```
+extern type Headers
+extern type ReadableStream
+extern type URL
+```
 
-  // Sub-agents
-  use agent Coder
-  use agent Reviewer
-  use agent Designer
+Opaque types can be passed around and used in type positions, but field access and method calls on them are compile errors.
 
-  on message(msg: UserMessage) -> AgentResponse {
-    let plan = await self.complete(```
-      Given this request: #{msg.content}
-      Which agent should handle it? Respond with: coder, reviewer, or designer.
-    ```)
+### 5.4 Codegen Behavior
 
-    match plan.choice {
-      "coder" => await Coder.send(msg)
-      "reviewer" => await Reviewer.send(msg)
-      "designer" => await Designer.send(msg)
-      _ => await self.complete(msg)  // handle directly
-    }
-  }
-}
+- Extern declarations are **erased** — no JavaScript output for the declaration itself
+- `@js("module")` externs generate `import { name } from "module"` when referenced
+- Multiple `@js` externs from the same module are merged into one import
+- Unreferenced `@js` externs produce no import
+
+```javascript
+// These two declarations:
+@js("node:fs/promises") extern fn readFile(path: str, encoding: str) -> Promise<str>
+@js("node:fs/promises") extern fn writeFile(path: str, data: str) -> Promise<nil>
+
+// Produce a single merged import when both are used:
+// import { readFile, writeFile } from "node:fs/promises";
 ```
 
 ---
 
-## 6. Tool Declarations
+## 6. Agent System
 
-Tools are typed functions that agents can invoke via tool-calling.
+Agents are declared as **DSL blocks** using `@agent`. The block body serves double duty: it is both the agent's system prompt and its configuration.
 
-### 6.1 Basic Tool
+### 6.1 Agent Declaration
+
+```
+@agent Coder ```
+  @model claude-sonnet | gpt-4o
+
+  @tools #{[read_file, write_file, run_tests]}
+
+  @role system
+  You are an expert software engineer.
+
+  ## Your capabilities
+  You can read files, write code, and run tests.
+
+  ## Style
+  - Be concise
+  - Prefer #{preferred_lang} idioms
+  - Always explain your reasoning
+
+  @constraints {
+    temperature: 0.3
+    max_tokens: 4096
+  }
+
+  @examples {
+    user: "Fix this bug"
+    assistant: "I'll analyze the code and identify the issue..."
+  }
+```
+```
+
+The `@agent` DSL handler extends the `@prompt` handler with agent-specific directives:
+
+| Directive | Purpose |
+|-----------|---------|
+| `@model` | Model selection with fallback order |
+| `@tools #{[...]}` | List of tool functions this agent can invoke |
+| `@skills #{[...]}` | List of skills this agent can use |
+| `@agents #{[...]}` | Sub-agents for composition |
+| `@on <event> #{handler}` | Lifecycle hooks (captures a handler function) |
+| `@role`, `@examples`, `@constraints`, `@output`, `@messages` | Inherited from prompt DSL |
+
+Body text (outside directives) is the system prompt.
+
+### 6.2 Agent Composition
+
+```
+@agent TeamLead ```
+  @model claude-sonnet
+  @agents #{[Coder, Reviewer, Designer]}
+
+  @role system
+  You coordinate a team of specialist agents.
+  Delegate tasks to the right agent based on the request.
+
+  Available agents:
+  - Coder: writes and edits code
+  - Reviewer: reviews code for quality and bugs
+  - Designer: designs UI components and layouts
+```
+```
+
+### 6.3 Agent Lifecycle Hooks
+
+```
+@agent Coder ```
+  @model claude-sonnet
+  @tools #{[read_file, write_file]}
+
+  @on init #{fn(ctx: AgentContext) {
+    log.info("Agent initialized for session ${ctx.session_id}")
+  }}
+
+  @on message #{fn(msg: UserMessage) -> AgentResponse {
+    let enriched = enrich_context(msg)
+    await self.complete(enriched)
+  }}
+
+  @on error #{fn(e: Error) {
+    log.error("Agent error: ${e.msg}")
+  }}
+
+  @role system
+  You are an expert software engineer.
+```
+```
+
+### 6.4 What Agents Compile To
+
+```javascript
+// @agent Coder ``` ... ```  compiles to:
+import { AgentRuntime } from "@agentscript/runtime"
+
+const Coder = new AgentRuntime({
+  model: ["claude-sonnet", "gpt-4o"],
+  tools: [read_file, write_file, run_tests],
+  messages: [
+    { role: "system", content: "You are an expert software engineer..." }
+  ],
+  constraints: { temperature: 0.3, max_tokens: 4096 },
+  examples: [...]
+});
+```
+
+---
+
+## 7. Tool Declarations
+
+Tools are **annotated functions** that agents can invoke via LLM tool-calling. The `@tool` annotation marks a regular `fn` as a tool.
+
+### 7.1 Basic Tool
 
 ```javascript
 /// Read the contents of a file at the given path.
 /// @param path - Absolute or relative file path
 /// @returns The file contents as a string
-tool read_file(path: str) -> str | Error {
-  let content = await fs.read(path)?
-  content
+@tool
+fn read_file(path: str) -> str | Error {
+  await fs.read(path)
 }
 
 /// Search the web for a query.
 /// @param query - The search query
 /// @param max_results - Maximum number of results (default: 5)
-tool web_search(query: str, max_results: int = 5) -> [SearchResult] {
+@tool
+fn web_search(query: str, max_results: int = 5) -> [SearchResult] {
   let results = await http.get("https://api.search.com/v1", {
     params: { q: query, limit: max_results }
   })?
@@ -378,19 +540,12 @@ tool web_search(query: str, max_results: int = 5) -> [SearchResult] {
 }
 ```
 
-### 6.2 Tool Metadata (for LLM function-calling schema)
-
-The compiler automatically generates JSON Schema for tool-calling from:
-1. The function signature (param names, types)
-2. Doc comments (`///`)
-3. `@param` / `@returns` annotations
+### 7.2 Tool with Inline Description
 
 ```javascript
-// This tool declaration:
-/// Calculate the area of a shape.
-/// @param shape - The type of shape: "circle", "rect", or "triangle"
-/// @param dims - Dimensions object
-tool calc_area(shape: str, dims: {w: num?, h: num?, r: num?}) -> num {
+// When a short description suffices, pass it directly:
+@tool("Calculate the area of a geometric shape")
+fn calc_area(shape: str, dims: {w: num?, h: num?, r: num?}) -> num {
   match shape {
     "circle" => 3.14159 * (dims.r ?? 0) ** 2
     "rect" => (dims.w ?? 0) * (dims.h ?? 0)
@@ -398,15 +553,26 @@ tool calc_area(shape: str, dims: {w: num?, h: num?, r: num?}) -> num {
     _ => Error("unknown shape: ${shape}")
   }
 }
+```
 
-// Compiles to this JSON Schema automatically:
-// {
+### 7.3 JSON Schema Generation
+
+The compiler automatically generates JSON Schema for tool-calling from:
+1. The function name
+2. Parameter names and types
+3. Doc comments (`///`) and `@param` / `@returns` annotations
+4. Inline `@tool("description")` if provided
+
+```javascript
+// The @tool fn above compiles to:
+// function calc_area(shape, dims) { ... }
+// calc_area.schema = {
 //   "name": "calc_area",
-//   "description": "Calculate the area of a shape.",
+//   "description": "Calculate the area of a geometric shape",
 //   "parameters": {
 //     "type": "object",
 //     "properties": {
-//       "shape": { "type": "string", "description": "The type of shape: \"circle\", \"rect\", or \"triangle\"" },
+//       "shape": { "type": "string" },
 //       "dims": {
 //         "type": "object",
 //         "properties": {
@@ -421,118 +587,99 @@ tool calc_area(shape: str, dims: {w: num?, h: num?, r: num?}) -> num {
 
 ---
 
-## 7. Skill Declarations
+## 8. Skill Declarations
 
-Skills are **multi-step, compound tool sequences** — like macros over tools.
+Skills are **multi-step, compound tool sequences** declared as DSL blocks. They describe a recipe that an agent can follow.
 
-```javascript
-/// Skill to refactor code: reads, analyzes, rewrites, and tests.
-skill refactor_skill {
-  /// Description shown to the LLM so it knows when to invoke this skill
-  description = "Refactor code in a file to improve quality, readability, and performance."
+```
+@skill refactor ```
+  @description "Refactor code in a file to improve quality, readability, and performance."
 
-  /// Input schema
-  input {
+  @input {
     file_path: str
-    goals: [str]          // e.g. ["reduce complexity", "improve naming"]
+    goals: [str]
     dry_run: bool = false
   }
 
-  /// The execution steps
-  steps(input) {
-    // Step 1: Read the file
-    let code = await read_file(input.file_path)?
+  @steps
+  1. Read the file at #{input.file_path}
+  2. Analyze code for refactoring opportunities based on goals: #{input.goals}
+  3. Generate refactored version
+  4. If not #{input.dry_run}, write the result and run tests
+  5. If tests fail, rollback to original
 
-    // Step 2: Ask the agent to analyze
-    let analysis = await self.agent.complete(```
-      Analyze this code for refactoring opportunities.
-      Goals: #{input.goals.join(", ")}
-
-      ```#{code}```
-    ```)
-
-    // Step 3: Generate refactored version
-    let new_code = await self.agent.complete(```
-      Apply these refactorings to the code:
-      #{analysis.content}
-
-      Original:
-      ```#{code}```
-    ```)
-
-    // Step 4: Write and test
-    if !input.dry_run {
-      await write_file(input.file_path, new_code.content)?
-      let test_result = await run_tests()?
-      if test_result.failed > 0 {
-        // Rollback
-        await write_file(input.file_path, code)?
-        ret Error("Refactoring broke ${test_result.failed} tests, rolled back.")
-      }
-    }
-
-    {
-      original: code,
-      refactored: new_code.content,
-      analysis: analysis.content,
-      applied: !input.dry_run
-    }
+  @output {
+    original: str
+    refactored: str
+    analysis: str
+    applied: bool
   }
-}
+```
+```
+
+### Skill Directives
+
+| Directive | Purpose |
+|-----------|---------|
+| `@description` | Description shown to the LLM for skill invocation |
+| `@input { ... }` | Input schema (typed fields with optional defaults) |
+| `@steps` | Ordered list of steps (natural language with `#{}` captures) |
+| `@output { ... }` | Output schema |
+
+### What Skills Compile To
+
+```javascript
+import { SkillRuntime } from "@agentscript/runtime"
+
+const refactor = new SkillRuntime({
+  description: "Refactor code in a file...",
+  inputSchema: { file_path: "string", goals: "string[]", dry_run: "boolean" },
+  steps: [...],
+  outputSchema: { original: "string", refactored: "string", ... }
+});
 ```
 
 ---
 
-## 8. Component Declarations
+## 9. Component Declarations
 
-Components emit **React components** that agents can return as rich UI.
+Components emit **React components** that agents can return as rich UI. Declared as DSL blocks.
 
-### 8.1 Component Definition
+### 9.1 Component Definition
 
-```javascript
-/// A card that displays a code diff.
-/// @prop original - The original code
-/// @prop modified - The modified code
-/// @prop language - Syntax highlighting language
-component DiffView {
-  props {
+```
+@component DiffView ```
+  @props {
     original: str
     modified: str
     language: str = "typescript"
     show_line_numbers: bool = true
   }
 
-  /// Optional state (compiled to React useState)
-  state {
+  @state {
     collapsed: bool = false
     side_by_side: bool = true
   }
 
-  /// The render body — JSX-like syntax
-  render {
-    <div class="diff-container">
-      <div class="diff-header">
-        <span>"Diff: #{self.props.language}"</span>
-        <button on:click={() => self.state.collapsed = !self.state.collapsed}>
-          {if self.state.collapsed { "Expand" } else { "Collapse" }}
-        </button>
-        <button on:click={() => self.state.side_by_side = !self.state.side_by_side}>
-          {if self.state.side_by_side { "Unified" } else { "Side by Side" }}
-        </button>
-      </div>
-      {if !self.state.collapsed {
-        <DiffRenderer
-          original={self.props.original}
-          modified={self.props.modified}
-          mode={if self.state.side_by_side { "split" } else { "unified" }}
-          language={self.props.language}
-        />
-      }}
+  @render
+  <div class="diff-container">
+    <div class="diff-header">
+      <span>Diff: #{self.props.language}</span>
+      <button on:click=#{fn() { self.state.collapsed = !self.state.collapsed }}>
+        #{if self.state.collapsed { "Expand" } else { "Collapse" }}
+      </button>
     </div>
-  }
+    #{if !self.state.collapsed {
+      <DiffRenderer
+        original=#{self.props.original}
+        modified=#{self.props.modified}
+        mode=#{if self.state.side_by_side { "split" } else { "unified" }}
+        language=#{self.props.language}
+      />
+    }}
+  </div>
 
-  /// Styles (scoped CSS)
-  style {
+  @style {
     .diff-container {
       border: 1px solid #e2e8f0;
       border-radius: 8px;
@@ -546,171 +693,114 @@ component DiffView {
       border-bottom: 1px solid #e2e8f0;
     }
   }
-}
+```
 ```
 
-### 8.2 Component Usage in Agents
+### 9.2 Component Directives
+
+| Directive | Purpose |
+|-----------|---------|
+| `@props { ... }` | Prop types with optional defaults |
+| `@state { ... }` | Internal state (compiles to React `useState`) |
+| `@render` | JSX-like template with `#{}` captures |
+| `@style { ... }` | Scoped CSS |
+
+### 9.3 What Components Compile To
 
 ```javascript
-agent Coder {
-  // ...
-
-  on message(msg: UserMessage) -> AgentResponse {
-    let result = await self.complete(msg)
-
-    // Agent can return components as rich responses
-    if result.has_diff {
-      ret AgentResponse {
-        text: result.explanation,
-        component: <DiffView
-          original={result.original_code}
-          modified={result.new_code}
-          language="typescript"
-        />
-      }
-    }
-
-    result
-  }
+// React functional component + TypeScript .d.ts
+export function DiffView({ original, modified, language = "typescript", show_line_numbers = true }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [side_by_side, setSideBySide] = useState(true);
+  return (
+    <div className="diff-container">...</div>
+  );
 }
-```
-
-### 8.3 Component Type Generation
-
-The compiler generates TypeScript definitions from component declarations:
-
-```typescript
-// Auto-generated: DiffView.d.ts
-export interface DiffViewProps {
-  /** The original code */
-  original: string;
-  /** The modified code */
-  modified: string;
-  /** Syntax highlighting language */
-  language?: string;
-  /** Whether to show line numbers */
-  show_line_numbers?: boolean;
-}
-
-export declare const DiffView: React.FC<DiffViewProps>;
 ```
 
 ---
 
-## 9. HTTP Server
+## 10. HTTP Server
 
-A minimal, built-in HTTP layer — no framework needed.
+HTTP servers are declared as DSL blocks using `@server`. Route handlers use `#{}` captures.
 
-### 9.1 Route Declarations
+### 10.1 Server Declaration
 
-```javascript
-/// Declare an HTTP server
-http server {
-  port: 3000
-  host: "0.0.0.0"
+```
+@server app ```
+  @port 3000
+  @host "0.0.0.0"
 
-  /// Middleware
-  use cors({ origins: ["*"] })
-  use auth_bearer(validate: verify_token)
-  use logger
+  @middleware #{cors({ origins: ["*"] })}
+  @middleware #{logger}
 
-  /// Health check
-  route GET /health {
-    { status: "ok", uptime: process.uptime() }
-  }
+  @get /health #{fn(c: Context) -> Response {
+    c.json({ status: "ok" })
+  }}
 
-  /// Agent chat endpoint
-  route POST /chat {
-    let body = req.json()?
+  @post /chat #{async fn(c: Context) -> Response {
+    let body = await c.req.json()
     let agent = Coder()
     let response = await agent.send(UserMessage {
       content: body.message,
       session_id: body.session_id ?? uuid()
     })
-    response
-  }
+    c.json({ reply: response.text })
+  }}
 
-  /// Streaming agent response
-  route POST /chat/stream {
-    let body = req.json()?
-    let agent = Coder()
+  @get /tools #{fn(c: Context) -> Response {
+    c.json(Coder.tool_schemas())
+  }}
 
-    // SSE streaming
-    res.stream(content_type: "text/event-stream") {
-      await agent.stream(body.message) |> on chunk {
-        emit "data: ${json(chunk)}\n\n"
-      }
-    }
-  }
-
-  /// Serve a component
-  route GET /ui/diff {
-    res.component(<DiffView
-      original={req.query.original ?? ""}
-      modified={req.query.modified ?? ""}
-    />)
-  }
-
-  /// Static files
-  route GET /static/* {
-    res.static("./public")
-  }
-
-  /// SDK endpoint: list available tools
-  route GET /tools {
-    agent::Coder.tool_schemas()
-  }
-
-  /// SDK endpoint: invoke a tool directly
-  route POST /tools/:name/invoke {
-    let tool_name = req.params.name
-    let args = req.json()?
-    let result = await agent::Coder.invoke_tool(tool_name, args)?
-    result
-  }
-}
+  @post /tools/:name/invoke #{async fn(c: Context) -> Response {
+    let tool_name = c.req.param("name")
+    let args = await c.req.json()
+    let result = await Coder.invoke_tool(tool_name, args)
+    c.json(result)
+  }}
+```
 ```
 
-### 9.2 Request / Response Types
+### 10.2 Server Directives
+
+| Directive | Purpose |
+|-----------|---------|
+| `@port` | Server port |
+| `@host` | Bind address |
+| `@middleware #{expr}` | Middleware registration |
+| `@get /path #{handler}` | GET route |
+| `@post /path #{handler}` | POST route |
+| `@put /path #{handler}` | PUT route |
+| `@delete /path #{handler}` | DELETE route |
+| `@patch /path #{handler}` | PATCH route |
+
+Path patterns support parameters (`:name`) and wildcards (`*`).
+
+### 10.3 What Servers Compile To
 
 ```javascript
-// Built-in types (no import needed)
-struct Request {
-  method: str
-  path: str
-  headers: {str: str}
-  query: {str: str}
-  params: {str: str}       // route params like :name
-  body: any                // raw body
+// Compiles to Hono-based HTTP server
+import { Hono } from "hono";
+import { serve } from "@agentscript/serve";
 
-  fn json() -> any | Error    // parse JSON body
-  fn text() -> str | Error    // read as text
-}
-
-struct Response {
-  status: int = 200
-  headers: {str: str} = {}
-  body: any
-
-  fn json(data: any) -> Response
-  fn text(s: str) -> Response
-  fn stream(content_type: str, handler: fn) -> Response
-  fn component(c: Component) -> Response    // SSR a component
-  fn static(dir: str) -> Response
-}
+const app = new Hono();
+app.get("/health", (c) => c.json({ status: "ok" }));
+app.post("/chat", async (c) => { ... });
+serve(app, { port: 3000, host: "0.0.0.0" });
 ```
 
 ---
 
-## 10. Module System
+## 11. Module System
 
-### 10.1 Imports / Exports
+### 11.1 Imports / Exports
 
 ```javascript
 // Named exports (default)
-// file: tools/fs.as
-pub tool read_file(path: str) -> str { ... }
-pub tool write_file(path: str, content: str) -> nil { ... }
+// file: tools/fs.ag
+/// Read a file from disk.
+@tool
+pub fn read_file(path: str) -> str { ... }
 
 // Import
 import { read_file, write_file } from "./tools/fs"
@@ -726,28 +816,28 @@ import { Anthropic } from "@agentscript/anthropic"
 export { read_file, write_file } from "./tools/fs"
 ```
 
-### 10.2 File Extension
+### 11.2 File Extension
 
-`.as` — AgentScript source files
+`.ag` — AgentScript source files
 
-### 10.3 Project Structure Convention
+### 11.3 Project Structure Convention
 
 ```
 my-agent/
 ├── agent.toml              # project config (like package.json)
 ├── src/
-│   ├── main.as             # entry point
+│   ├── main.ag             # entry point
 │   ├── agents/
-│   │   ├── coder.as
-│   │   └── reviewer.as
+│   │   ├── coder.ag
+│   │   └── reviewer.ag
 │   ├── tools/
-│   │   ├── fs.as
-│   │   └── search.as
+│   │   ├── fs.ag
+│   │   └── search.ag
 │   ├── skills/
-│   │   └── refactor.as
+│   │   └── refactor.ag
 │   ├── components/
-│   │   └── diff_view.as
-│   └── server.as           # HTTP routes
+│   │   └── diff_view.ag
+│   └── server.ag           # HTTP routes
 └── dist/                   # compiled output
     ├── index.js             # Node.js entry
     ├── package.json
@@ -756,34 +846,62 @@ my-agent/
 
 ---
 
-## 11. Standard Library
+## 12. Standard Library
 
-### 11.1 Built-in Modules
+### 12.1 Layer A — Web API Externs (zero-cost)
+
+These are `extern` declarations wrapping Web Standard APIs. No runtime code — they exist only for type checking.
 
 ```javascript
-// Core
-import { log } from "std:log"            // structured logging
-import { json, yaml, toml } from "std:encoding"
-import { uuid, hash, base64 } from "std:crypto"
-import { sleep, timeout } from "std:time"
+// std:web/fetch — the Fetch API
+extern fn fetch(input: str | Request, init: RequestInit?) -> Promise<Response>
+extern struct Response {
+  status: int
+  ok: bool
+  headers: Headers
+  fn json() -> Promise<any>
+  fn text() -> Promise<str>
+}
+extern type Headers
 
-// IO
-import { fs } from "std:fs"              // file system
-import { http } from "std:http"          // HTTP client
-import { env } from "std:env"            // environment variables
+// std:web/crypto
+extern fn crypto_randomUUID() -> str
 
-// Agent runtime
-import { LLM } from "std:llm"            // raw LLM access
-import { Memory } from "std:memory"      // conversation memory / vector store
-import { Events } from "std:events"      // event bus
+// std:web/timers
+extern fn setTimeout(callback: () -> nil, ms: int) -> int
+extern fn setInterval(callback: () -> nil, ms: int) -> int
 ```
 
-### 11.2 LLM Abstraction
+### 12.2 Layer B — Runtime-backed Modules
+
+These are AG code with `@js` extern bindings to a JS runtime package (`@agentscript/stdlib`).
 
 ```javascript
+// std:http/server — HTTP server (Hono wrapper)
+import { createApp, Context } from "std:http/server"
+
+// std:http/client — HTTP client (fetch wrapper)
+import { get, post, put, del } from "std:http/client"
+
+// std:log — structured logging
+import { log } from "std:log"
+
+// std:fs — file system
+import { readFile, writeFile } from "std:fs"
+
+// std:env — environment variables
+import { env } from "std:env"
+
+// std:encoding — JSON/YAML/TOML
+import { json, yaml, toml } from "std:encoding"
+```
+
+### 12.3 Future: Agent Runtime Modules
+
+```javascript
+// std:llm — raw LLM access (outside agent context)
 import { LLM } from "std:llm"
 
-// Direct LLM call (outside agent context)
 let response = await LLM.complete({
   model: "claude-sonnet-4-20250514",
   messages: [
@@ -794,15 +912,16 @@ let response = await LLM.complete({
   max_tokens: 1024
 })
 
-// Streaming
-await LLM.stream({ ... }) |> on chunk {
-  process.stdout.write(chunk.text)
-}
+// std:memory — conversation memory / vector store
+import { Memory } from "std:memory"
+
+// std:events — event bus
+import { Events } from "std:events"
 ```
 
 ---
 
-## 12. Grammar (Simplified BNF)
+## 13. Grammar (Simplified BNF)
 
 Designed for **recursive descent parsing** — no left recursion, clear lookaheads.
 
@@ -810,53 +929,34 @@ Designed for **recursive descent parsing** — no left recursion, clear lookahea
 program         = (import_decl | declaration)* ;
 
 (* === Top-level Declarations === *)
-declaration     = agent_decl
-                | tool_decl
-                | skill_decl
-                | component_decl
+declaration     = dsl_decl
+                | annotation_decl
+                | extern_decl
                 | fn_decl
                 | struct_decl
                 | enum_decl
                 | type_decl
-                | http_decl
                 | var_decl ";"
                 ;
 
-(* === Agent === *)
-agent_decl      = "agent" IDENT "{" agent_body "}" ;
-agent_body      = (agent_member)* ;
-agent_member    = "prompt" "=" prompt_literal
-                | IDENT ":" type ("=" expr)?             (* state field *)
-                | "use" ("agent")? IDENT                 (* tool/skill/sub-agent binding *)
-                | "on" IDENT "(" params? ")" ("->" type)? block
-                ;
+(* === DSL Blocks === *)
+dsl_decl        = "@" IDENT IDENT ( dsl_inline | dsl_fileref ) ;
+dsl_inline      = "```" dsl_content "```" ;
+dsl_fileref     = "from" STRING ;
+dsl_content     = (DSL_TEXT | "#{" expr "}" | "@" IDENT dsl_directive_args?)* ;
+dsl_directive_args = STRING | "{" (IDENT ":" expr ","?)* "}" ;
 
-(* === Tool === *)
-tool_decl       = doc_comments? "pub"? "tool" IDENT "(" params ")" "->" type block ;
+(* === Annotations === *)
+annotation_decl = annotation+ (fn_decl | extern_decl) ;
+annotation      = "@" IDENT ( "(" annotation_args ")" )? ;
+annotation_args = STRING ("," IDENT "=" STRING)* ;
 
-(* === Skill === *)
-skill_decl      = "skill" IDENT "{" skill_body "}" ;
-skill_body      = "description" "=" STRING
-                | "input" "{" struct_fields "}"
-                | "steps" "(" IDENT ")" block
-                ;
-
-(* === Component === *)
-component_decl  = "component" IDENT "{" component_body "}" ;
-component_body  = "props" "{" struct_fields "}"
-                | "state" "{" struct_fields "}"
-                | "render" "{" jsx_expr "}"
-                | "style" "{" css_block "}"
-                ;
-
-(* === HTTP === *)
-http_decl       = "http" "server" "{" http_body "}" ;
-http_body       = http_field | http_use | route_decl ;
-http_field      = IDENT ":" expr ;
-http_use        = "use" call_expr ;
-route_decl      = "route" HTTP_METHOD path_pattern block ;
-HTTP_METHOD     = "GET" | "POST" | "PUT" | "DELETE" | "PATCH" ;
-path_pattern    = ("/" (IDENT | ":" IDENT | "*"))+ ;
+(* === Extern Declarations === *)
+extern_decl     = "extern" ( extern_fn | extern_struct | extern_type ) ;
+extern_fn       = "fn" IDENT "(" params ")" ("->" type)? ;
+extern_struct   = "struct" IDENT "{" extern_members "}" ;
+extern_members  = (IDENT ":" type ","? | "fn" IDENT "(" params? ")" ("->" type)?)* ;
+extern_type     = "type" IDENT ;
 
 (* === Functions === *)
 fn_decl         = "pub"? ("async")? "fn" IDENT "(" params? ")" ("->" type)? block ;
@@ -868,15 +968,16 @@ struct_decl     = "struct" IDENT "{" struct_fields "}" ;
 struct_fields   = (IDENT ":" type ("=" expr)? ","?)* ;
 enum_decl       = "enum" IDENT "{" enum_variants "}" ;
 enum_variants   = (IDENT ("(" struct_fields ")")? ","?)* ;
-type_decl       = "type" IDENT ("< " IDENT ">")? "=" type ;
+type_decl       = "type" IDENT ("<" IDENT ">")? "=" type ;
 
 (* === Types === *)
 type            = base_type ("?" | "|" type | "[" "]")* ;
 base_type       = "str" | "num" | "int" | "bool" | "nil" | "any"
-                | IDENT
-                | "(" params_types ")" "->" type       (* function type *)
-                | "{" (IDENT ":" type ","?)* "}"       (* object type *)
-                | "[" type "]"                          (* array type *)
+                | IDENT ("<" type ">")?                   (* named type, optional generic *)
+                | "(" params_types ")" "->" type          (* function type *)
+                | "{" (IDENT ":" type ","?)* "}"          (* object type *)
+                | "[" type "]"                             (* array type *)
+                | "..." type                               (* variadic *)
                 ;
 
 (* === Expressions === *)
@@ -896,14 +997,14 @@ call            = "(" args? ")" ;
 index           = "[" expr "]" ;
 member          = "." IDENT | "::" IDENT ;
 primary         = NUMBER | STRING | BOOL | "nil"
-                | template_string | prompt_literal
+                | template_string
                 | IDENT
                 | "(" expr ")"
-                | "[" (expr ("," expr)*)? "]"          (* array *)
-                | "{" (IDENT ":" expr ("," )?)* "}"    (* object *)
+                | "[" (expr ("," expr)*)? "]"             (* array *)
+                | "{" (IDENT ":" expr (",")?)* "}"        (* object *)
                 | jsx_expr
                 | "fn" "(" params? ")" ("->" type)? block
-                | "(" params ")" "=>" (expr | block)   (* arrow fn *)
+                | "(" params ")" "=>" (expr | block)      (* arrow fn *)
                 | match_expr | if_expr
                 ;
 
@@ -936,11 +1037,6 @@ jsx_expr        = "<" IDENT jsx_attrs? ">" jsx_children "</" IDENT ">"
 jsx_attrs       = (IDENT "=" "{" expr "}" | IDENT "=" STRING | "on:" IDENT "=" "{" expr "}")* ;
 jsx_children    = (jsx_expr | "{" expr "}" | JSX_TEXT)* ;
 
-(* === Prompt Literal === *)
-prompt_literal  = "```" prompt_content "```" ;
-prompt_content  = (PROMPT_TEXT | "#{" expr "}" | "@" IDENT prompt_meta)* ;
-prompt_meta     = STRING | "{" (IDENT ":" expr)* "}" ;
-
 (* === Imports === *)
 import_decl     = "import" "{" IDENT ("," IDENT)* "}" "from" STRING
                 | "import" "*" "as" IDENT "from" STRING
@@ -949,12 +1045,12 @@ import_decl     = "import" "{" IDENT ("," IDENT)* "}" "from" STRING
 
 ---
 
-## 13. Compilation Target
+## 14. Compilation Target
 
-### 13.1 Output: Node.js Bundle
+### 14.1 Output: Node.js Bundle
 
 ```
-asc build src/main.as --target node --outdir dist/
+asc build src/main.ag --target node --outdir dist/
 ```
 
 Produces:
@@ -963,157 +1059,168 @@ Produces:
 dist/
 ├── package.json          # auto-generated with dependencies
 ├── index.js              # entry point (ESM)
-├── agents/               # compiled agent classes
+├── agents/               # compiled agent runtime configs
 ├── tools/                # tool functions + JSON schemas
-├── skills/               # skill executors
+├── skills/               # skill runtime configs
 ├── components/           # React components (.jsx) + .d.ts
-├── server.js             # Express/Fastify HTTP server
+├── server.js             # Hono HTTP server
 └── schemas/              # OpenAPI spec, tool schemas
 ```
 
-### 13.2 Compilation Pipeline
+### 14.2 Compilation Pipeline
 
 ```
-Source (.as)
+Source (.ag)
     │
     ▼
-  Lexer          → Token stream
+  Lexer          → Token stream (with DSL raw mode for @blocks)
     │
     ▼
   Parser         → AST (recursive descent, LL(1))
-    │
+    │               includes DslBlock nodes + Annotation nodes
     ▼
   Type Checker   → Annotated AST (basic structural typing)
-    │
-    ▼
-  IR             → Normalized intermediate form
-    │
+    │               validates captures inside DSL blocks
     ▼
   Code Gen       → JavaScript (ESM) + TypeScript declarations
-    │
+    │               dispatches DslBlock to registered DslHandlers
+    │               processes @tool annotations for schema gen
     ▼
   Bundler        → Node.js package (with package.json, deps)
 ```
 
-### 13.3 What Each Construct Compiles To
+### 14.3 What Each Construct Compiles To
 
 | AgentScript | JavaScript Output |
 |-------------|-------------------|
-| `agent Coder { ... }` | `class Coder extends AgentRuntime { ... }` |
-| `tool read_file(...)` | `function read_file(...)` + `read_file.schema = { ... }` |
-| `skill refactor_skill { ... }` | `class RefactorSkill extends SkillRuntime { ... }` |
-| `component DiffView { ... }` | React functional component + `.d.ts` |
-| `http server { ... }` | Fastify/Express route registrations |
-| `prompt = \`\`\`...\`\`\`` | Template literal function with metadata |
+| `@agent Coder ``` ... ``` ` | `new AgentRuntime({ model, tools, messages, ... })` |
+| `@tool fn read_file(...)` | `function read_file(...) { ... }` + `read_file.schema = { ... }` |
+| `@skill refactor ``` ... ``` ` | `new SkillRuntime({ description, inputSchema, steps, ... })` |
+| `@component DiffView ``` ... ``` ` | React functional component + `.d.ts` |
+| `@server app ``` ... ``` ` | Hono route registrations + serve() |
+| `@prompt system ``` ... ``` ` | `new PromptTemplate({ messages: [...] })` |
 | `struct User { ... }` | TypeScript interface (type-only, erased) |
 | `enum Status { ... }` | Tagged union: `{ tag: "Active", since: "..." }` |
+| `extern fn fetch(...)` | Erased (import generated if `@js`) |
+| `extern struct Response { ... }` | Erased (type-only) |
 
-### 13.4 Runtime Library
+### 14.4 Runtime Library
 
 The compiled output depends on a small runtime:
 
 ```javascript
 // @agentscript/runtime (npm package)
-import {
-  AgentRuntime,     // base class for agents
-  SkillRuntime,     // base class for skills
-  ToolRegistry,     // tool registration + schema extraction
-  PromptBuilder,    // prompt literal evaluation
-  createServer      // minimal HTTP server factory
-} from "@agentscript/runtime"
+import { AgentRuntime } from "@agentscript/runtime"
+import { SkillRuntime } from "@agentscript/runtime"
+import { PromptTemplate } from "@agentscript/prompt-runtime"
+
+// @agentscript/stdlib (npm package) — Layer B runtime
+import { createApp } from "@agentscript/stdlib/http/server"
+import { get, post } from "@agentscript/stdlib/http/client"
+
+// @agentscript/serve (npm package) — Node.js server runner
+import { serve } from "@agentscript/serve"
 ```
 
 ---
 
-## 14. Complete Example
+## 15. Complete Example
 
 ```javascript
-// file: src/main.as
+// file: src/main.ag
 
-import { Anthropic } from "@agentscript/anthropic"
-import { read_file, write_file } from "./tools/fs"
+import { createApp, Context } from "std:http/server"
+import { readFile, writeFile } from "std:fs"
 
-/// A minimal code assistant agent.
-agent CodeBot {
-  prompt = ```
-    @role system
-    @model claude-sonnet-4-20250514
-
-    You are a concise coding assistant.
-    When asked to edit code, always show a diff.
-
-    @constraints {
-      temperature: 0.2
-      max_tokens: 4096
-    }
-  ```
-
-  use read_file
-  use write_file
-
-  on message(msg: UserMessage) -> AgentResponse {
-    await self.complete(msg)
-  }
+// --- Extern: Web Fetch API ---
+extern fn fetch(url: str) -> Promise<Response>
+extern struct Response {
+  status: int
+  ok: bool
+  fn json() -> Promise<any>
+  fn text() -> Promise<str>
 }
 
+// --- Tools: annotated functions ---
+
 /// Read a file from disk.
-tool read_file(path: str) -> str | Error {
-  await fs.read(path)
+/// @param path - Absolute or relative file path
+@tool
+fn read_file(path: str) -> str | Error {
+  await readFile(path, "utf-8")
 }
 
 /// Write content to a file.
-tool write_file(path: str, content: str) -> nil | Error {
-  await fs.write(path, content)
+/// @param path - File path to write to
+/// @param content - Content to write
+@tool
+fn write_file(path: str, content: str) -> nil | Error {
+  await writeFile(path, content)
 }
 
-/// A simple card component for displaying code.
-component CodeCard {
-  props {
+// --- Agent: DSL block ---
+
+@agent CodeBot ```
+  @model claude-sonnet-4-20250514
+  @tools #{[read_file, write_file]}
+
+  @role system
+  You are a concise coding assistant.
+  When asked to edit code, always show a diff.
+
+  @constraints {
+    temperature: 0.2
+    max_tokens: 4096
+  }
+```
+
+// --- Component: DSL block ---
+
+@component CodeCard ```
+  @props {
     code: str
     language: str = "text"
     title: str?
   }
 
-  render {
-    <div class="code-card">
-      {if self.props.title {
-        <h3>{self.props.title}</h3>
-      }}
-      <pre><code class="language-#{self.props.language}">
-        {self.props.code}
-      </code></pre>
-    </div>
-  }
-}
+  @render
+  <div class="code-card">
+    #{if self.props.title {
+      <h3>#{self.props.title}</h3>
+    }}
+    <pre><code class="language-#{self.props.language}">
+      #{self.props.code}
+    </code></pre>
+  </div>
+```
 
-/// HTTP server — the entry point
-http server {
-  port: env.PORT ?? 3000
+// --- Server: DSL block ---
 
-  use cors({ origins: ["*"] })
+@server app ```
+  @port 3000
 
-  route GET /health {
-    { status: "ok" }
-  }
+  @get /health #{fn(c: Context) -> Response {
+    c.json({ status: "ok" })
+  }}
 
-  route POST /chat {
-    let body = req.json()?
+  @post /chat #{async fn(c: Context) -> Response {
+    let body = await c.req.json()
     let bot = CodeBot()
     let response = await bot.send(UserMessage {
       content: body.message
     })
-    { reply: response.text }
-  }
+    c.json({ reply: response.text })
+  }}
 
-  route GET /tools {
-    CodeBot.tool_schemas()
-  }
-}
+  @get /tools #{fn(c: Context) -> Response {
+    c.json(CodeBot.tool_schemas())
+  }}
+```
 ```
 
 ---
 
-## 15. Compiler Implementation Notes
+## 16. Compiler Implementation Notes
 
 ### For Recursive Descent
 
@@ -1121,19 +1228,22 @@ The grammar is designed so each production can be identified by **one token of l
 
 | Lookahead Token | Production |
 |-----------------|------------|
-| `agent` | agent_decl |
-| `tool` | tool_decl |
-| `skill` | skill_decl |
-| `component` | component_decl |
+| `@` | DSL block or annotation — peek ahead to disambiguate |
+| `extern` | extern_decl |
 | `fn` | fn_decl |
 | `struct` | struct_decl |
 | `enum` | enum_decl |
 | `type` | type_decl |
-| `http` | http_decl |
 | `let` / `mut` / `const` | var_decl |
 | `import` | import_decl |
 | `pub` | peek next token for the actual decl |
 | `///` | accumulate doc comments, attach to next decl |
+
+**`@` disambiguation:**
+- `@ IDENT IDENT (``` | from)` → DSL block (`@prompt sys ``` ... ```)
+- `@ IDENT ( "(" ... ")" )? (fn | extern)` → Annotation (`@tool fn ...`, `@js("mod") extern ...`)
+
+**DSL raw mode:** When the parser enters a DSL block (after the opening ` ``` `), the lexer switches to raw mode. It emits `DslText` tokens for regular content and `DslCaptureStart`/`DslCaptureEnd` around `#{ }` captures. Inside captures, normal AG tokenization resumes with brace nesting tracking. The closing ` ``` ` at line start ends raw mode.
 
 **Expression parsing** uses standard Pratt / precedence-climbing — each level is a separate function (`parse_or`, `parse_and`, `parse_equality`, etc.).
 
@@ -1146,21 +1256,38 @@ Intentionally minimal:
 3. **Check function calls** — param count + basic type compatibility
 4. **Check struct field access** — field existence
 5. **Narrow unions in `match`** — each arm knows the variant
-6. **Tool schema validation** — all params must be serializable types
-7. **Component prop checking** — JSX usage matches declared props
+6. **Validate DSL captures** — type-check `#{}` expressions inside DSL blocks
+7. **Validate extern calls** — check arguments against declared signatures
+8. **Validate @tool functions** — all params must be serializable types (for JSON Schema)
 
 That's it. No generics inference, no HKT, no variance analysis.
 
+### DSL Handler Pipeline
+
+During codegen, `DslBlock` nodes are dispatched to registered handlers:
+
+| DSL Kind | Handler | Output |
+|----------|---------|--------|
+| `prompt` | `PromptDslHandler` | `PromptTemplate` constructor |
+| `agent` | `AgentDslHandler` | `AgentRuntime` constructor |
+| `skill` | `SkillDslHandler` | `SkillRuntime` constructor |
+| `component` | `ComponentDslHandler` | React component |
+| `server` | `ServerDslHandler` | Hono routes + serve() |
+
+Unregistered DSL kinds produce a compile error.
+
 ---
 
-## 16. Reserved for Future
+## 17. Reserved for Future
 
 - `trait` / `impl` for shared interfaces
 - `test` blocks for inline testing
 - `deploy` directive for cloud deployment targets
 - `workflow` for multi-agent DAGs with retry/backoff
+- DSL statement block captures (`#{ ... statements ... }`)
 - WASM compilation target
-- Visual graph editor that round-trips to `.as` source
+- Visual graph editor that round-trips to `.ag` source
+- Custom DSL handler API for user-defined `@kind` blocks
 
 ---
 
@@ -1178,9 +1305,11 @@ That's it. No generics inference, no HKT, no variance analysis.
 | `nil` | `null` / `undefined` | unified, 3 chars |
 | `match` | `switch` | pattern matching, not fall-through |
 | `pub` | `export` | 3 chars vs 6 |
-| `use` | — | agent binding (new concept) |
-| `agent` | — | first-class agent (new) |
-| `tool` | — | first-class tool (new) |
-| `skill` | — | first-class skill (new) |
-| `component` | — | first-class component (new) |
-| `prompt` | — | first-class prompt DSL (new) |
+| `extern` | — | declare JS bindings (no body) |
+| `@tool` | — | annotation: mark fn as LLM-callable tool |
+| `@js("mod")` | — | annotation: bind extern to JS module |
+| `@agent` | — | DSL block: agent declaration |
+| `@prompt` | — | DSL block: prompt template |
+| `@skill` | — | DSL block: multi-step skill recipe |
+| `@component` | — | DSL block: React component |
+| `@server` | — | DSL block: HTTP server |
