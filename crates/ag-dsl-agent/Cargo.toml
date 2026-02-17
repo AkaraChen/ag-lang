@@ -1,0 +1,8 @@
+[package]
+name = "ag-dsl-agent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ag-dsl-core = { path = "../ag-dsl-core" }
+ag-dsl-prompt = { path = "../ag-dsl-prompt" }

@@ -1,0 +1,7 @@
+[package]
+name = "ag-dsl-skill"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ag-dsl-core = { path = "../ag-dsl-core" }

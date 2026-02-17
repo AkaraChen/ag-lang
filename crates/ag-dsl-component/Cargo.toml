@@ -1,0 +1,10 @@
+[package]
+name = "ag-dsl-component"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ag-dsl-core = { path = "../ag-dsl-core" }
+swc_common = { version = "14", features = ["sourcemap"] }
+swc_ecma_ast = "14"
+swc_ecma_parser = "22"
