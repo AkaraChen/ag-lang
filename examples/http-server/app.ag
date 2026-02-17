@@ -1,6 +1,6 @@
 import { createApp, Context } from "std:http/server"
 
-// --- Functions: arithmetic operations, if/else ---
+// --- Functions: match expression, if/else, arithmetic ---
 
 fn add(a: num, b: num) -> num {
     a + b
@@ -11,16 +11,12 @@ fn subtract(a: num, b: num) -> num {
 }
 
 fn calculate(op: str, a: num, b: num) -> num {
-    if op == "add" {
-        add(a, b)
-    } else if op == "subtract" {
-        subtract(a, b)
-    } else if op == "multiply" {
-        a * b
-    } else if op == "divide" {
-        if b == 0 { 0 } else { a / b }
-    } else {
-        0
+    match op {
+        "add" => add(a, b),
+        "subtract" => subtract(a, b),
+        "multiply" => a * b,
+        "divide" => if b == 0 { 0 } else { a / b },
+        _ => 0,
     }
 }
 

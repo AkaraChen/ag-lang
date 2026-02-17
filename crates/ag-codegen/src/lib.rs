@@ -1261,19 +1261,22 @@ fn make_iife(stmts: Vec<swc::Stmt>) -> swc::Expr {
     swc::Expr::Call(swc::CallExpr {
         span: DUMMY_SP,
         ctxt: SyntaxContext::empty(),
-        callee: swc::Callee::Expr(Box::new(swc::Expr::Arrow(swc::ArrowExpr {
+        callee: swc::Callee::Expr(Box::new(swc::Expr::Paren(swc::ParenExpr {
             span: DUMMY_SP,
-            ctxt: SyntaxContext::empty(),
-            params: Vec::new(),
-            body: Box::new(swc::BlockStmtOrExpr::BlockStmt(swc::BlockStmt {
+            expr: Box::new(swc::Expr::Arrow(swc::ArrowExpr {
                 span: DUMMY_SP,
                 ctxt: SyntaxContext::empty(),
-                stmts,
+                params: Vec::new(),
+                body: Box::new(swc::BlockStmtOrExpr::BlockStmt(swc::BlockStmt {
+                    span: DUMMY_SP,
+                    ctxt: SyntaxContext::empty(),
+                    stmts,
+                })),
+                is_async: false,
+                is_generator: false,
+                type_params: None,
+                return_type: None,
             })),
-            is_async: false,
-            is_generator: false,
-            type_params: None,
-            return_type: None,
         }))),
         args: Vec::new(),
         type_args: None,
