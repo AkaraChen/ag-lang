@@ -1,0 +1,37 @@
+// std:http/server — HTTP server (Layer B: Hono wrapper)
+// Runtime: import { App } from "@agentscript/stdlib/http/server"
+
+@js("@agentscript/stdlib/http/server")
+extern struct HonoRequest {
+    fn param(key: str) -> str
+    fn query(key: str) -> str?
+    fn header(name: str) -> str?
+    fn json() -> Promise<any>
+    fn text() -> Promise<str>
+}
+
+@js("@agentscript/stdlib/http/server")
+extern struct Context {
+    req: HonoRequest,
+    fn text(text: str) -> Response
+    fn json(data: any) -> Response
+    fn html(html: str) -> Response
+    fn redirect(url: str) -> Response
+    fn header(name: str, value: str)
+    fn status(code: int)
+}
+
+@js("@agentscript/stdlib/http/server")
+extern struct App {
+    fn get(path: str, handler: (Context) -> Response) -> App
+    fn post(path: str, handler: (Context) -> Response) -> App
+    fn put(path: str, handler: (Context) -> Response) -> App
+    fn delete(path: str, handler: (Context) -> Response) -> App
+    fn patch(path: str, handler: (Context) -> Response) -> App
+    fn middleware(handler: (Context, () -> Promise<nil>) -> Response) -> App
+    fn route(prefix: str, app: App) -> App
+    fn fetch(request: Request) -> Promise<Response>
+}
+
+@js("@agentscript/stdlib/http/server", name = "App")
+extern fn createApp() -> App

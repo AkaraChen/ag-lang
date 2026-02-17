@@ -788,7 +788,7 @@ fn translate_arrow(arrow: &ArrowExpr) -> swc::Expr {
         ctxt: SyntaxContext::empty(),
         params,
         body: Box::new(body),
-        is_async: false,
+        is_async: arrow.is_async,
         is_generator: false,
         type_params: None,
         return_type: None,

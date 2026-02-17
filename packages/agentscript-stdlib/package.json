@@ -1,0 +1,16 @@
+{
+  "name": "@agentscript/stdlib",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./http/server": "./http/server/index.js",
+    "./http/client": "./http/client/index.js",
+    "./log": "./log/index.js",
+    "./encoding": "./encoding/index.js",
+    "./env": "./env/index.js",
+    "./fs": "./fs/index.js"
+  },
+  "dependencies": {
+    "hono": "^4.0.0"
+  }
+}

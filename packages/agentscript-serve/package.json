@@ -1,0 +1,22 @@
+{
+  "name": "@agentscript/serve",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "agentscript-serve": "./src/cli.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.0.0"
+  },
+  "peerDependencies": {
+    "asc": "*"
+  },
+  "peerDependenciesMeta": {
+    "asc": {
+      "optional": true
+    }
+  }
+}

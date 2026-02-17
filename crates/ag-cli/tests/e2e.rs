@@ -541,3 +541,106 @@ import { foo } from "std:nonexistent"
     assert_ne!(code, 0);
     assert!(stderr.contains("unknown") || stderr.contains("nonexistent"));
 }
+
+// ── http-stdlib tests ──
+
+#[test]
+fn build_http_server_import() {
+    let (js, _, code) = build_ag(r#"
+import { createApp, Context } from "std:http/server"
+fn main() {
+    let app = createApp()
+    app.get("/", fn(c: Context) -> Response { c.text("hello") })
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains(r#"import { App as createApp } from "@agentscript/stdlib/http/server""#));
+    assert!(js.contains("createApp()"));
+}
+
+#[test]
+fn build_http_server_full_app() {
+    let (js, _, code) = build_ag(r#"
+import { createApp, Context } from "std:http/server"
+
+fn handler(c: Context) -> Response {
+    c.json({ message: "hello" })
+}
+
+fn main() {
+    let app = createApp()
+    app.get("/", handler)
+    app.post("/api", fn(c: Context) -> Response { c.text("ok") })
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains(r#"@agentscript/stdlib/http/server"#));
+    assert!(js.contains("createApp()"));
+    assert!(js.contains(r#"app.get("/"#));
+    assert!(js.contains(r#"app.post("/"#));
+}
+
+#[test]
+fn build_http_client_import() {
+    let (js, _, code) = build_ag(r#"
+import { get, post } from "std:http/client"
+async fn main() {
+    let resp = await get("https://api.example.com/data")
+    await post("https://api.example.com/send", { body: { key: "value" } })
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains(r#"@agentscript/stdlib/http/client"#));
+    assert!(js.contains("get("));
+    assert!(js.contains("post("));
+}
+
+#[test]
+fn build_http_server_client_mixed() {
+    let (js, _, code) = build_ag(r#"
+import { createApp, Context } from "std:http/server"
+import { get } from "std:http/client"
+
+async fn handler(c: Context) -> Response {
+    let resp = await get("https://api.example.com/data")
+    let data = await resp.json()
+    c.json(data)
+}
+
+fn main() {
+    let app = createApp()
+    app.get("/proxy", handler)
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains(r#"@agentscript/stdlib/http/server"#));
+    assert!(js.contains(r#"@agentscript/stdlib/http/client"#));
+}
+
+#[test]
+fn build_fn_expression() {
+    let (js, _, code) = build_ag(r#"
+fn apply(f: (int) -> int, x: int) -> int {
+    f(x)
+}
+fn main() {
+    apply(fn(x: int) -> int { x + 1 }, 42)
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains("(x)=>{"));
+}
+
+#[test]
+fn build_async_fn_expression() {
+    let (js, _, code) = build_ag(r#"
+fn run(f: () -> any) -> any {
+    f()
+}
+fn main() {
+    run(async fn() -> str { "hello" })
+}
+"#);
+    assert_eq!(code, 0);
+    assert!(js.contains("async ()=>{"));
+}

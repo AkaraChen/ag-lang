@@ -1691,6 +1691,34 @@ impl<'a> Parser<'a> {
                 self.advance();
                 self.parse_template_string(s, start)
             }
+            TokenKind::Fn | TokenKind::Async => {
+                // fn(params) -> RetType { body } as expression (parsed as ArrowExpr)
+                let is_async = matches!(self.peek(), TokenKind::Async);
+                if is_async {
+                    self.advance(); // consume 'async'
+                }
+                self.advance(); // consume 'fn'
+                self.expect(&TokenKind::LParen)?;
+                let params = self.parse_params()?;
+                self.expect(&TokenKind::RParen)?;
+                // Optional return type (ignored — arrow expr doesn't carry it)
+                if matches!(self.peek(), TokenKind::ThinArrow) {
+                    self.advance();
+                    let _ = self.parse_type()?;
+                }
+                let body = if matches!(self.peek(), TokenKind::LBrace) {
+                    ArrowBody::Block(self.parse_block()?)
+                } else {
+                    ArrowBody::Expr(self.parse_expr(0)?)
+                };
+                let end = self.current_span();
+                Some(Expr::Arrow(Box::new(ArrowExpr {
+                    params,
+                    body,
+                    is_async,
+                    span: Span::new(start.start, end.end),
+                })))
+            }
             _ => {
                 self.error(format!("unexpected token {:?}", self.peek()));
                 None
@@ -1757,6 +1785,7 @@ impl<'a> Parser<'a> {
         Some(Expr::Arrow(Box::new(ArrowExpr {
             params,
             body,
+            is_async: false,
             span: Span::new(start.start, end.end),
         })))
     }

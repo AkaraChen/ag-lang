@@ -1,0 +1,29 @@
+// std:http/client — HTTP client (Layer B: fetch wrapper)
+// Runtime: import { get, post, ... } from "@agentscript/stdlib/http/client"
+
+struct HttpOptions {
+    headers: {str: str}?,
+    body: any?,
+    timeout: int?,
+}
+
+@js("@agentscript/stdlib/http/client")
+extern fn get(url: str, options: HttpOptions?) -> Promise<Response>
+
+@js("@agentscript/stdlib/http/client")
+extern fn post(url: str, options: HttpOptions?) -> Promise<Response>
+
+@js("@agentscript/stdlib/http/client")
+extern fn put(url: str, options: HttpOptions?) -> Promise<Response>
+
+@js("@agentscript/stdlib/http/client")
+extern fn del(url: str, options: HttpOptions?) -> Promise<Response>
+
+@js("@agentscript/stdlib/http/client")
+extern fn patch(url: str, options: HttpOptions?) -> Promise<Response>
+
+@js("@agentscript/stdlib/http/client")
+extern fn head(url: str, options: HttpOptions?) -> Promise<Response>
+
+@js("@agentscript/stdlib/http/client")
+extern fn options(url: str, options: HttpOptions?) -> Promise<Response>

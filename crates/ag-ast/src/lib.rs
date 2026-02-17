@@ -172,6 +172,7 @@ pub struct ObjectField {
 pub struct ArrowExpr {
     pub params: Vec<Param>,
     pub body: ArrowBody,
+    pub is_async: bool,
     pub span: Span,
 }
 

@@ -11,6 +11,8 @@ pub fn resolve_std_module(path: &str) -> Option<&'static str> {
         "web/streams" => Some(include_str!("../modules/web/streams.ag")),
         "web/timers" => Some(include_str!("../modules/web/timers.ag")),
         // Layer B: AG wrappers (runtime via @agentscript/stdlib)
+        "http/server" => Some(include_str!("../modules/http/server.ag")),
+        "http/client" => Some(include_str!("../modules/http/client.ag")),
         "log" => Some(include_str!("../modules/log.ag")),
         "encoding" => Some(include_str!("../modules/encoding.ag")),
         "env" => Some(include_str!("../modules/env.ag")),
@@ -26,6 +28,8 @@ mod tests {
     #[test]
     fn resolve_known_modules() {
         assert!(resolve_std_module("web/fetch").is_some());
+        assert!(resolve_std_module("http/server").is_some());
+        assert!(resolve_std_module("http/client").is_some());
         assert!(resolve_std_module("log").is_some());
         assert!(resolve_std_module("fs").is_some());
         assert!(resolve_std_module("encoding").is_some());
