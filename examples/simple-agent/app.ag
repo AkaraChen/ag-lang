@@ -5,17 +5,17 @@ import { fetch, Response } from "std:web/fetch"
 
 // ── Prompt templates (no captures at module scope) ────────
 
-@prompt system_prompt ```
+@prompt system_prompt <<EOF
 @role system
 You are a helpful coding assistant.
 You specialize in TypeScript and Rust programming.
 Always be concise and accurate.
-```
+EOF
 
-@prompt greeting ```
+@prompt greeting <<EOF
 @role user
 Hello, what can you help me with today?
-```
+EOF
 
 // ── Tool functions ────────────────────────────────────────
 

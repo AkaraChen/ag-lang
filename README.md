@@ -25,11 +25,11 @@ fn lookup_docs(topic: str) -> str {
 }
 
 // Prompts — first-class DSL blocks for LLM messages
-@prompt system_prompt ```
+@prompt system_prompt <<EOF
 @role system
 You are a helpful coding assistant.
 You specialize in TypeScript and Rust programming.
-```
+EOF
 
 // Pattern matching, pipe operator
 fn process(input: str) -> str {

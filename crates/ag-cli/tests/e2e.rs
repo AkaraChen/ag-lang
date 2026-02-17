@@ -288,7 +288,7 @@ fn build_default_output_path() {
 #[test]
 fn build_dsl_prompt_inline_with_capture() {
     let (js, _, code) = build_ag(
-        "let role: str = \"admin\"\n@prompt system ```\n@role system\nYou are #{role}.\n```\n",
+        "let role: str = \"admin\"\n@prompt system <<EOF\n@role system\nYou are #{role}.\nEOF\n",
     );
     assert_eq!(code, 0);
     assert!(js.contains("const system"));
@@ -309,7 +309,7 @@ fn build_dsl_prompt_from_file() {
 
 #[test]
 fn check_dsl_capture_undefined_var_error() {
-    let (stderr, code) = check_ag("@prompt sys ```\n#{undefined_var}\n```\n");
+    let (stderr, code) = check_ag("@prompt sys <<EOF\n#{undefined_var}\nEOF\n");
     assert_ne!(code, 0);
     assert!(stderr.contains("error"));
 }
@@ -317,7 +317,7 @@ fn check_dsl_capture_undefined_var_error() {
 #[test]
 fn build_dsl_prompt_full_template() {
     let (js, _, code) = build_ag(r#"
-@prompt chat ```
+@prompt chat <<EOF
 @model claude-sonnet | gpt-4o
 @role system
 You are a helpful assistant.
@@ -329,7 +329,7 @@ You are a helpful assistant.
   temperature: 0.7
   max_tokens: 4096
 }
-```
+EOF
 "#);
     assert_eq!(code, 0);
     assert!(js.contains("PromptTemplate"));
@@ -347,14 +347,14 @@ You are a helpful assistant.
 #[test]
 fn build_dsl_prompt_with_output_schema() {
     let (js, _, code) = build_ag(r#"
-@prompt qa ```
+@prompt qa <<EOF
 @role system
 Answer the question.
 @output {
   answer: str
   confidence: num
 }
-```
+EOF
 "#);
     assert_eq!(code, 0);
     assert!(js.contains("outputSchema"));

@@ -591,7 +591,7 @@ impl<'a> Parser<'a> {
             span: name_span,
         };
 
-        // Check for `from` (file reference) or ``` (inline block)
+        // Check for `from` (file reference) or `<<LABEL` (inline block)
         match self.peek() {
             TokenKind::From => {
                 self.advance(); // consume 'from'
@@ -630,7 +630,7 @@ impl<'a> Parser<'a> {
 
                 if matches!(start_tok.kind, TokenKind::Error(_)) {
                     self.error(format!(
-                        "expected ``` or `from` after `@{} {}`",
+                        "expected `<<LABEL` or `from` after `@{} {}`",
                         kind, name
                     ));
                     return None;
@@ -752,7 +752,7 @@ impl<'a> Parser<'a> {
                 }
 
                 // Advance the main parser past the DSL block
-                // Find the byte position after the closing ```
+                // Find the byte position after the closing heredoc label
                 let last_tok = dsl_tokens.last().unwrap();
                 let end_byte = byte_offset + last_tok.span.end as usize;
                 // Skip main tokens until we're past end_byte
@@ -2366,7 +2366,7 @@ fn foo() -> int { 42 }"#,
 
     #[test]
     fn dsl_inline_block() {
-        let m = parse_ok("@prompt system ```\nYou are helpful.\n```\n");
+        let m = parse_ok("@prompt system <<EOF\nYou are helpful.\nEOF\n");
         assert_eq!(m.items.len(), 1);
         if let Item::DslBlock(dsl) = &m.items[0] {
             assert_eq!(dsl.kind, "prompt");
@@ -2384,7 +2384,7 @@ fn foo() -> int { 42 }"#,
 
     #[test]
     fn dsl_inline_with_capture() {
-        let m = parse_ok("@prompt sys ```\nHello #{name}, you have #{count} messages.\n```\n");
+        let m = parse_ok("@prompt sys <<EOF\nHello #{name}, you have #{count} messages.\nEOF\n");
         if let Item::DslBlock(dsl) = &m.items[0] {
             if let DslContent::Inline { parts } = &dsl.content {
                 assert_eq!(parts.len(), 5);
@@ -2419,7 +2419,7 @@ fn foo() -> int { 42 }"#,
 
     #[test]
     fn dsl_unknown_kind_accepted() {
-        let m = parse_ok("@graphql GetUsers ```\nquery { users { id } }\n```\n");
+        let m = parse_ok("@graphql GetUsers <<EOF\nquery { users { id } }\nEOF\n");
         if let Item::DslBlock(dsl) = &m.items[0] {
             assert_eq!(dsl.kind, "graphql");
             assert_eq!(dsl.name.name, "GetUsers");
@@ -2431,11 +2431,7 @@ fn foo() -> int { 42 }"#,
     #[test]
     fn dsl_mixed_with_other_items() {
         let m = parse_ok(
-            r#"import { x } from "y"
-@prompt sys ```
-hello
-```
-fn foo() -> int { 1 }"#,
+            "import { x } from \"y\"\n@prompt sys <<EOF\nhello\nEOF\nfn foo() -> int { 1 }",
         );
         assert_eq!(m.items.len(), 3);
         assert!(matches!(m.items[0], Item::Import(_)));
@@ -2599,7 +2595,7 @@ fn foo() -> int { 1 }"#,
 
     #[test]
     fn dsl_capture_single_ident() {
-        let m = parse_ok("@prompt p ```\n#{name}\n```\n");
+        let m = parse_ok("@prompt p <<EOF\n#{name}\nEOF\n");
         if let Item::DslBlock(dsl) = &m.items[0] {
             if let DslContent::Inline { parts } = &dsl.content {
                 let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
@@ -2611,7 +2607,7 @@ fn foo() -> int { 1 }"#,
 
     #[test]
     fn dsl_capture_single_binary_expr() {
-        let m = parse_ok("@prompt p ```\n#{a + b}\n```\n");
+        let m = parse_ok("@prompt p <<EOF\n#{a + b}\nEOF\n");
         if let Item::DslBlock(dsl) = &m.items[0] {
             if let DslContent::Inline { parts } = &dsl.content {
                 let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
@@ -2623,7 +2619,7 @@ fn foo() -> int { 1 }"#,
 
     #[test]
     fn dsl_capture_single_array() {
-        let m = parse_ok("@prompt p ```\n#{[x, y]}\n```\n");
+        let m = parse_ok("@prompt p <<EOF\n#{[x, y]}\nEOF\n");
         if let Item::DslBlock(dsl) = &m.items[0] {
             if let DslContent::Inline { parts } = &dsl.content {
                 let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
@@ -2635,7 +2631,7 @@ fn foo() -> int { 1 }"#,
 
     #[test]
     fn dsl_capture_single_fn_expr() {
-        let m = parse_ok("@prompt p ```\n#{fn(x) { x + 1 }}\n```\n");
+        let m = parse_ok("@prompt p <<EOF\n#{fn(x) { x + 1 }}\nEOF\n");
         if let Item::DslBlock(dsl) = &m.items[0] {
             if let DslContent::Inline { parts } = &dsl.content {
                 let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
@@ -2648,7 +2644,7 @@ fn foo() -> int { 1 }"#,
 
     #[test]
     fn dsl_capture_block_with_stmts_and_tail() {
-        let m = parse_ok("@prompt p ```\n#{let x = 1; let y = 2; x + y}\n```\n");
+        let m = parse_ok("@prompt p <<EOF\n#{let x = 1; let y = 2; x + y}\nEOF\n");
         if let Item::DslBlock(dsl) = &m.items[0] {
             if let DslContent::Inline { parts } = &dsl.content {
                 let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
@@ -2665,7 +2661,7 @@ fn foo() -> int { 1 }"#,
 
     #[test]
     fn dsl_capture_block_no_tail() {
-        let m = parse_ok("@prompt p ```\n#{let x = 1; println(x);}\n```\n");
+        let m = parse_ok("@prompt p <<EOF\n#{let x = 1; println(x);}\nEOF\n");
         if let Item::DslBlock(dsl) = &m.items[0] {
             if let DslContent::Inline { parts } = &dsl.content {
                 let cap = parts.iter().find(|p| matches!(p, DslPart::Capture(_, _))).unwrap();
@@ -2682,7 +2678,7 @@ fn foo() -> int { 1 }"#,
 
     #[test]
     fn dsl_capture_empty_diagnostic() {
-        let result = parse("@prompt p ```\n#{}\n```\n");
+        let result = parse("@prompt p <<EOF\n#{}\nEOF\n");
         assert!(
             result.diagnostics.iter().any(|d| d.message.contains("empty capture")),
             "expected 'empty capture' diagnostic, got {:?}",

@@ -128,6 +128,7 @@ pub struct Lexer<'a> {
     dsl_raw_mode: bool,
     dsl_capture_depth: u32,
     dsl_block_start_pos: usize,
+    dsl_heredoc_label: Option<String>,
 }
 
 impl<'a> Lexer<'a> {
@@ -140,6 +141,7 @@ impl<'a> Lexer<'a> {
             dsl_raw_mode: false,
             dsl_capture_depth: 0,
             dsl_block_start_pos: 0,
+            dsl_heredoc_label: None,
         }
     }
 
@@ -184,14 +186,36 @@ impl<'a> Lexer<'a> {
     }
 
     /// Called by the parser to enter DSL raw mode.
-    /// Expects ``` followed by newline; emits DslBlockStart.
+    /// Expects `<<LABEL` followed by newline; emits DslBlockStart.
     pub fn enter_dsl_raw_mode(&mut self) -> Token {
         self.skip_whitespace_no_newline();
         let start = self.pos;
 
-        // Check for ```
-        if self.peek() == Some(b'`') && self.peek_at(1) == Some(b'`') && self.peek_at(2) == Some(b'`') {
-            self.pos += 3;
+        // Check for <<LABEL
+        if self.peek() == Some(b'<') && self.peek_at(1) == Some(b'<') {
+            self.pos += 2; // consume '<<'
+
+            // Read the label identifier
+            let label_start = self.pos;
+            while let Some(ch) = self.peek() {
+                if ch.is_ascii_alphanumeric() || ch == b'_' {
+                    self.pos += 1;
+                } else {
+                    break;
+                }
+            }
+
+            if self.pos == label_start {
+                return Token {
+                    kind: TokenKind::Error("expected label after `<<`".to_string()),
+                    span: Span::new(start as u32, self.pos as u32),
+                    text: String::new(),
+                };
+            }
+
+            let label = self.source[label_start..self.pos].to_string();
+            self.dsl_heredoc_label = Some(label);
+
             // Skip rest of line (allow trailing whitespace/content until newline)
             while let Some(ch) = self.peek() {
                 if ch == b'\n' {
@@ -209,7 +233,7 @@ impl<'a> Lexer<'a> {
             }
         } else {
             Token {
-                kind: TokenKind::Error("expected ``` to open DSL block".to_string()),
+                kind: TokenKind::Error("expected `<<LABEL` to open DSL block".to_string()),
                 span: Span::new(start as u32, self.pos as u32),
                 text: String::new(),
             }
@@ -268,9 +292,9 @@ impl<'a> Lexer<'a> {
                         text: "#{".to_string(),
                     };
                 }
-                Some(b'`') if self.peek_at(1) == Some(b'`') && self.peek_at(2) == Some(b'`') => {
-                    // Check if ``` is at line start (only whitespace before it on this line)
-                    if self.is_backticks_at_line_start() {
+                Some(_) => {
+                    // Check if heredoc label appears at line start
+                    if self.is_heredoc_label_at_line_start() {
                         if !text.is_empty() {
                             return Token {
                                 kind: TokenKind::DslText(text),
@@ -279,19 +303,16 @@ impl<'a> Lexer<'a> {
                             };
                         }
                         let end_start = self.pos;
-                        self.pos += 3;
+                        let label_len = self.dsl_heredoc_label.as_ref().unwrap().len();
+                        self.pos += label_len;
                         self.dsl_raw_mode = false;
                         return Token {
                             kind: TokenKind::DslBlockEnd,
                             span: Span::new(end_start as u32, self.pos as u32),
-                            text: "```".to_string(),
+                            text: self.source[end_start..self.pos].to_string(),
                         };
                     }
-                    // Mid-line backticks: treat as text
-                    text.push(self.source[self.pos..].chars().next().unwrap());
-                    self.pos += 1;
-                }
-                Some(_) => {
+                    // Regular character
                     let ch = self.source[self.pos..].chars().next().unwrap();
                     text.push(ch);
                     self.pos += ch.len_utf8();
@@ -300,8 +321,13 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn is_backticks_at_line_start(&self) -> bool {
-        // Walk backwards from current pos to find the start of the current line
+    fn is_heredoc_label_at_line_start(&self) -> bool {
+        let label = match &self.dsl_heredoc_label {
+            Some(l) => l,
+            None => return false,
+        };
+
+        // Walk backwards from current pos to check only whitespace before on this line
         let mut i = self.pos;
         while i > 0 {
             let prev = self.bytes[i - 1];
@@ -313,6 +339,23 @@ impl<'a> Lexer<'a> {
             }
             i -= 1;
         }
+
+        // Check if text at current pos matches the label
+        let remaining = &self.source[self.pos..];
+        if !remaining.starts_with(label.as_str()) {
+            return false;
+        }
+
+        // Check that after the label, only whitespace until newline or EOF
+        let after_label = &self.bytes[self.pos + label.len()..];
+        for &b in after_label {
+            match b {
+                b'\n' => return true,
+                b' ' | b'\t' | b'\r' => continue,
+                _ => return false,
+            }
+        }
+        // EOF after label is also fine
         true
     }
 
@@ -1289,7 +1332,7 @@ mod tests {
 
     #[test]
     fn dsl_raw_mode_plain_text() {
-        let mut lexer = Lexer::new("```\nYou are a helpful assistant.\n```\n");
+        let mut lexer = Lexer::new("<<EOF\nYou are a helpful assistant.\nEOF\n");
         let start_tok = lexer.enter_dsl_raw_mode();
         assert_eq!(start_tok.kind, TokenKind::DslBlockStart);
         let text_tok = lexer.next_token();
@@ -1300,7 +1343,7 @@ mod tests {
 
     #[test]
     fn dsl_single_capture() {
-        let mut lexer = Lexer::new("```\nHello #{name}!\n```\n");
+        let mut lexer = Lexer::new("<<EOF\nHello #{name}!\nEOF\n");
         let _ = lexer.enter_dsl_raw_mode();
         let t1 = lexer.next_token();
         assert_eq!(t1.kind, TokenKind::DslText("Hello ".into()));
@@ -1318,7 +1361,7 @@ mod tests {
 
     #[test]
     fn dsl_multiple_captures() {
-        let mut lexer = Lexer::new("```\n#{a} and #{b}\n```\n");
+        let mut lexer = Lexer::new("<<EOF\n#{a} and #{b}\nEOF\n");
         let _ = lexer.enter_dsl_raw_mode();
         assert_eq!(lexer.next_token().kind, TokenKind::DslCaptureStart);
         assert_eq!(lexer.next_token().kind, TokenKind::Ident("a".into()));
@@ -1333,7 +1376,7 @@ mod tests {
 
     #[test]
     fn dsl_hash_not_followed_by_brace() {
-        let mut lexer = Lexer::new("```\n## Heading\n#{expr}\n```\n");
+        let mut lexer = Lexer::new("<<EOF\n## Heading\n#{expr}\nEOF\n");
         let _ = lexer.enter_dsl_raw_mode();
         assert_eq!(lexer.next_token().kind, TokenKind::DslText("## Heading\n".into()));
         assert_eq!(lexer.next_token().kind, TokenKind::DslCaptureStart);
@@ -1345,7 +1388,7 @@ mod tests {
 
     #[test]
     fn dsl_nested_braces_in_capture() {
-        let mut lexer = Lexer::new("```\n#{a + { x: 1 }}\n```\n");
+        let mut lexer = Lexer::new("<<EOF\n#{a + { x: 1 }}\nEOF\n");
         let _ = lexer.enter_dsl_raw_mode();
         assert_eq!(lexer.next_token().kind, TokenKind::DslCaptureStart);
         // Tokens inside capture: a + { x : 1 }
@@ -1361,7 +1404,7 @@ mod tests {
 
     #[test]
     fn dsl_unterminated_block() {
-        let mut lexer = Lexer::new("```\n  content\n");
+        let mut lexer = Lexer::new("<<EOF\n  content\n");
         let _ = lexer.enter_dsl_raw_mode();
         let t1 = lexer.next_token();
         assert_eq!(t1.kind, TokenKind::DslText("  content\n".into()));
@@ -1370,18 +1413,27 @@ mod tests {
     }
 
     #[test]
-    fn dsl_backticks_midline_not_block_end() {
-        let mut lexer = Lexer::new("```\nuse ``` in code\n```\n");
+    fn dsl_label_midline_not_block_end() {
+        let mut lexer = Lexer::new("<<EOF\nuse EOF in code\nEOF\n");
         let _ = lexer.enter_dsl_raw_mode();
-        assert_eq!(lexer.next_token().kind, TokenKind::DslText("use ``` in code\n".into()));
+        assert_eq!(lexer.next_token().kind, TokenKind::DslText("use EOF in code\n".into()));
         assert_eq!(lexer.next_token().kind, TokenKind::DslBlockEnd);
     }
 
     #[test]
     fn dsl_indented_block_end() {
-        let mut lexer = Lexer::new("```\n  content\n  ```\n");
+        let mut lexer = Lexer::new("<<EOF\n  content\n  EOF\n");
         let _ = lexer.enter_dsl_raw_mode();
         assert_eq!(lexer.next_token().kind, TokenKind::DslText("  content\n  ".into()));
+        assert_eq!(lexer.next_token().kind, TokenKind::DslBlockEnd);
+    }
+
+    #[test]
+    fn dsl_custom_label() {
+        let mut lexer = Lexer::new("<<PROMPT\nHello world\nPROMPT\n");
+        let start_tok = lexer.enter_dsl_raw_mode();
+        assert_eq!(start_tok.kind, TokenKind::DslBlockStart);
+        assert_eq!(lexer.next_token().kind, TokenKind::DslText("Hello world\n".into()));
         assert_eq!(lexer.next_token().kind, TokenKind::DslBlockEnd);
     }
 

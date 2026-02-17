@@ -72,9 +72,9 @@ DSL blocks are **top-level declarations** for domain-specific content — prompt
 #### Syntax
 
 ```
-@<kind> <name> ```
+@<kind> <name> <<LABEL
   ... DSL content ...
-```
+LABEL
 ```
 
 Or file reference form:
@@ -85,25 +85,26 @@ Or file reference form:
 
 - `<kind>` — any identifier (e.g., `prompt`, `agent`, `skill`, `component`, `server`, `graphql`, ...)
 - `<name>` — the binding name for the compiled output
-- The triple-backtick block enters **raw mode** — content is not tokenized as AG code
+- `LABEL` — any identifier (e.g., `EOF`, `PROMPT`, `END`) chosen by the author; the closing label must match exactly at the start of a line
+- The heredoc block enters **raw mode** — content is not tokenized as AG code
 
 #### Captures
 
 Inside DSL blocks, `#{ expr }` captures an AgentScript expression (evaluated at runtime):
 
 ```
-@prompt greeting ```
+@prompt greeting <<EOF
   Hello, #{user.name}! You have #{messages.len()} new messages.
-```
+EOF
 ```
 
 Captures can contain any AG expression — identifiers, member access, function calls, arithmetic:
 
 ```
-@prompt summary ```
+@prompt summary <<EOF
   Total items: #{cart.items.len()}
   Subtotal: #{format_currency(cart.total())}
-```
+EOF
 ```
 
 > **Future:** Statement block captures (`#{ ... stmts ... }`) are planned for DSL blocks that need executable code (e.g., route handlers in `@server`).
@@ -113,7 +114,7 @@ Captures can contain any AG expression — identifiers, member access, function 
 Inside DSL blocks, `@keyword` at the start of a line is a **directive** — metadata parsed by the DSL handler:
 
 ```
-@prompt system_prompt ```
+@prompt system_prompt <<EOF
   @role system
   @model claude-sonnet | gpt-4o
 
@@ -128,7 +129,7 @@ Inside DSL blocks, `@keyword` at the start of a line is a **directive** — meta
     temperature: 0.7
     max_tokens: 2048
   }
-```
+EOF
 ```
 
 Each DSL kind defines its own set of valid directives. The prompt DSL supports: `@role`, `@model`, `@examples`, `@output`, `@constraints`, `@messages`.
@@ -139,7 +140,7 @@ The DSL system is **open** — any `@kind` identifier is accepted by the parser.
 
 ### 2.6 Annotations
 
-Annotations decorate declarations with metadata. They use the same `@` prefix as DSL blocks, but are followed by a declaration (not a name + backticks):
+Annotations decorate declarations with metadata. They use the same `@` prefix as DSL blocks, but are followed by a declaration (not a name + heredoc):
 
 ```javascript
 // @tool marks a function as an LLM-callable tool
@@ -158,7 +159,7 @@ extern fn path_join(parts: ...str) -> str
 ```
 
 **Disambiguation:** When the parser sees `@`, it looks ahead:
-- `@ IDENT IDENT (``` | from)` → DSL block
+- `@ IDENT IDENT (<<LABEL | from)` → DSL block
 - `@ IDENT ( "(" args ")" )? declaration` → Annotation on the following declaration
 
 Built-in annotations:
@@ -410,7 +411,7 @@ Agents are declared as **DSL blocks** using `@agent`. The block body serves doub
 ### 6.1 Agent Declaration
 
 ```
-@agent Coder ```
+@agent Coder <<EOF
   @model claude-sonnet | gpt-4o
 
   @tools #{[read_file, write_file, run_tests]}
@@ -435,7 +436,7 @@ Agents are declared as **DSL blocks** using `@agent`. The block body serves doub
     user: "Fix this bug"
     assistant: "I'll analyze the code and identify the issue..."
   }
-```
+EOF
 ```
 
 The `@agent` DSL handler extends the `@prompt` handler with agent-specific directives:
@@ -454,7 +455,7 @@ Body text (outside directives) is the system prompt.
 ### 6.2 Agent Composition
 
 ```
-@agent TeamLead ```
+@agent TeamLead <<EOF
   @model claude-sonnet
   @agents #{[Coder, Reviewer, Designer]}
 
@@ -466,13 +467,13 @@ Body text (outside directives) is the system prompt.
   - Coder: writes and edits code
   - Reviewer: reviews code for quality and bugs
   - Designer: designs UI components and layouts
-```
+EOF
 ```
 
 ### 6.3 Agent Lifecycle Hooks
 
 ```
-@agent Coder ```
+@agent Coder <<EOF
   @model claude-sonnet
   @tools #{[read_file, write_file]}
 
@@ -491,13 +492,13 @@ Body text (outside directives) is the system prompt.
 
   @role system
   You are an expert software engineer.
-```
+EOF
 ```
 
 ### 6.4 What Agents Compile To
 
 ```javascript
-// @agent Coder ``` ... ```  compiles to:
+// @agent Coder <<EOF ... EOF  compiles to:
 import { AgentRuntime } from "@agentscript/runtime"
 
 const Coder = new AgentRuntime({
@@ -592,7 +593,7 @@ The compiler automatically generates JSON Schema for tool-calling from:
 Skills are **multi-step, compound tool sequences** declared as DSL blocks. They describe a recipe that an agent can follow.
 
 ```
-@skill refactor ```
+@skill refactor <<EOF
   @description "Refactor code in a file to improve quality, readability, and performance."
 
   @input {
@@ -614,7 +615,7 @@ Skills are **multi-step, compound tool sequences** declared as DSL blocks. They 
     analysis: str
     applied: bool
   }
-```
+EOF
 ```
 
 ### Skill Directives
@@ -648,7 +649,7 @@ Components emit **React components** that agents can return as rich UI. Declared
 ### 9.1 Component Definition
 
 ```
-@component DiffView ```
+@component DiffView <<EOF
   @props {
     original: str
     modified: str
@@ -693,7 +694,7 @@ Components emit **React components** that agents can return as rich UI. Declared
       border-bottom: 1px solid #e2e8f0;
     }
   }
-```
+EOF
 ```
 
 ### 9.2 Component Directives
@@ -727,7 +728,7 @@ HTTP servers are declared as DSL blocks using `@server`. Route handlers use `#{}
 ### 10.1 Server Declaration
 
 ```
-@server app ```
+@server app <<EOF
   @port 3000
   @host "0.0.0.0"
 
@@ -758,7 +759,7 @@ HTTP servers are declared as DSL blocks using `@server`. Route handlers use `#{}
     let result = await Coder.invoke_tool(tool_name, args)
     c.json(result)
   }}
-```
+EOF
 ```
 
 ### 10.2 Server Directives
@@ -941,7 +942,7 @@ declaration     = dsl_decl
 
 (* === DSL Blocks === *)
 dsl_decl        = "@" IDENT IDENT ( dsl_inline | dsl_fileref ) ;
-dsl_inline      = "```" dsl_content "```" ;
+dsl_inline      = "<<" IDENT dsl_content IDENT ;
 dsl_fileref     = "from" STRING ;
 dsl_content     = (DSL_TEXT | "#{" expr "}" | "@" IDENT dsl_directive_args?)* ;
 dsl_directive_args = STRING | "{" (IDENT ":" expr ","?)* "}" ;
@@ -1093,12 +1094,12 @@ Source (.ag)
 
 | AgentScript | JavaScript Output |
 |-------------|-------------------|
-| `@agent Coder ``` ... ``` ` | `new AgentRuntime({ model, tools, messages, ... })` |
+| `@agent Coder <<EOF ... EOF` | `new AgentRuntime({ model, tools, messages, ... })` |
 | `@tool fn read_file(...)` | `function read_file(...) { ... }` + `read_file.schema = { ... }` |
-| `@skill refactor ``` ... ``` ` | `new SkillRuntime({ description, inputSchema, steps, ... })` |
-| `@component DiffView ``` ... ``` ` | React functional component + `.d.ts` |
-| `@server app ``` ... ``` ` | Hono route registrations + serve() |
-| `@prompt system ``` ... ``` ` | `new PromptTemplate({ messages: [...] })` |
+| `@skill refactor <<EOF ... EOF` | `new SkillRuntime({ description, inputSchema, steps, ... })` |
+| `@component DiffView <<EOF ... EOF` | React functional component + `.d.ts` |
+| `@server app <<EOF ... EOF` | Hono route registrations + serve() |
+| `@prompt system <<EOF ... EOF` | `new PromptTemplate({ messages: [...] })` |
 | `struct User { ... }` | TypeScript interface (type-only, erased) |
 | `enum Status { ... }` | Tagged union: `{ tag: "Active", since: "..." }` |
 | `extern fn fetch(...)` | Erased (import generated if `@js`) |
@@ -1160,7 +1161,7 @@ fn write_file(path: str, content: str) -> nil | Error {
 
 // --- Agent: DSL block ---
 
-@agent CodeBot ```
+@agent CodeBot <<EOF
   @model claude-sonnet-4-20250514
   @tools #{[read_file, write_file]}
 
@@ -1172,11 +1173,11 @@ fn write_file(path: str, content: str) -> nil | Error {
     temperature: 0.2
     max_tokens: 4096
   }
-```
+EOF
 
 // --- Component: DSL block ---
 
-@component CodeCard ```
+@component CodeCard <<EOF
   @props {
     code: str
     language: str = "text"
@@ -1192,11 +1193,11 @@ fn write_file(path: str, content: str) -> nil | Error {
       #{self.props.code}
     </code></pre>
   </div>
-```
+EOF
 
 // --- Server: DSL block ---
 
-@server app ```
+@server app <<EOF
   @port 3000
 
   @get /health #{fn(c: Context) -> Response {
@@ -1215,7 +1216,7 @@ fn write_file(path: str, content: str) -> nil | Error {
   @get /tools #{fn(c: Context) -> Response {
     c.json(CodeBot.tool_schemas())
   }}
-```
+EOF
 ```
 
 ---
@@ -1240,10 +1241,10 @@ The grammar is designed so each production can be identified by **one token of l
 | `///` | accumulate doc comments, attach to next decl |
 
 **`@` disambiguation:**
-- `@ IDENT IDENT (``` | from)` → DSL block (`@prompt sys ``` ... ```)
+- `@ IDENT IDENT (<<LABEL | from)` → DSL block (`@prompt sys <<EOF ... EOF`)
 - `@ IDENT ( "(" ... ")" )? (fn | extern)` → Annotation (`@tool fn ...`, `@js("mod") extern ...`)
 
-**DSL raw mode:** When the parser enters a DSL block (after the opening ` ``` `), the lexer switches to raw mode. It emits `DslText` tokens for regular content and `DslCaptureStart`/`DslCaptureEnd` around `#{ }` captures. Inside captures, normal AG tokenization resumes with brace nesting tracking. The closing ` ``` ` at line start ends raw mode.
+**DSL raw mode:** When the parser enters a DSL block (after the opening `<<LABEL`), the lexer switches to raw mode. It emits `DslText` tokens for regular content and `DslCaptureStart`/`DslCaptureEnd` around `#{ }` captures. Inside captures, normal AG tokenization resumes with brace nesting tracking. The matching `LABEL` at line start ends raw mode.
 
 **Expression parsing** uses standard Pratt / precedence-climbing — each level is a separate function (`parse_or`, `parse_and`, `parse_equality`, etc.).
 

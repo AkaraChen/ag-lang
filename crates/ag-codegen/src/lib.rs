@@ -1428,7 +1428,7 @@ mod tests {
 
     #[test]
     fn dsl_prompt_inline_no_capture() {
-        let js = compile("@prompt greeting ```\n@role system\nHello, world!\n```\n");
+        let js = compile("@prompt greeting <<EOF\n@role system\nHello, world!\nEOF\n");
         assert!(js.contains("const greeting"));
         assert!(js.contains("PromptTemplate"));
         assert!(js.contains("Hello, world!"));
@@ -1437,7 +1437,7 @@ mod tests {
 
     #[test]
     fn dsl_prompt_inline_with_captures() {
-        let js = compile("@prompt system ```\n@role system\nYou are #{role}. Answer in #{lang}.\n```\n");
+        let js = compile("@prompt system <<EOF\n@role system\nYou are #{role}. Answer in #{lang}.\nEOF\n");
         assert!(js.contains("const system"));
         assert!(js.contains("PromptTemplate"));
         assert!(js.contains("ctx.role"));
@@ -1455,7 +1455,7 @@ mod tests {
 
     #[test]
     fn dsl_unregistered_handler_error() {
-        let parsed = ag_parser::parse("@graphql GetUsers ```\nquery { users }\n```\n");
+        let parsed = ag_parser::parse("@graphql GetUsers <<EOF\nquery { users }\nEOF\n");
         let translator = Translator::new();
         // Don't register any handler
         let result = translator.codegen(&parsed.module);
@@ -1467,7 +1467,7 @@ mod tests {
 
     #[test]
     fn dsl_handler_uses_block_name() {
-        let js = compile("@prompt my_prompt ```\n@role system\nContent here\n```\n");
+        let js = compile("@prompt my_prompt <<EOF\n@role system\nContent here\nEOF\n");
         assert!(js.contains("const my_prompt"));
         assert!(js.contains("PromptTemplate"));
     }
@@ -1478,7 +1478,7 @@ mod tests {
         // The prompt handler wraps captures as ctx.__capture_N in template strings,
         // so the block expression doesn't appear inline. But it must parse and
         // codegen without errors.
-        let js = compile("@prompt p ```\n@role system\nResult: #{let x = 1; x + 1}\n```\n");
+        let js = compile("@prompt p <<EOF\n@role system\nResult: #{let x = 1; x + 1}\nEOF\n");
         assert!(js.contains("const p"), "should declare prompt variable");
         assert!(js.contains("PromptTemplate"), "should use PromptTemplate");
         assert!(js.contains("__capture_0"), "block capture should produce capture reference");

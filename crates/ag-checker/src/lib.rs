@@ -1131,13 +1131,13 @@ mod tests {
 
     #[test]
     fn dsl_valid_capture() {
-        assert_no_errors("let role: str = \"admin\"\n@prompt sys ```\nYou are #{role}.\n```\n");
+        assert_no_errors("let role: str = \"admin\"\n@prompt sys <<EOF\nYou are #{role}.\nEOF\n");
     }
 
     #[test]
     fn dsl_capture_undefined_var() {
         assert_has_error(
-            "@prompt sys ```\n#{undefined_var}\n```\n",
+            "@prompt sys <<EOF\n#{undefined_var}\nEOF\n",
             "undefined variable",
         );
     }
@@ -1145,7 +1145,7 @@ mod tests {
     #[test]
     fn dsl_capture_type_not_constrained() {
         // Any type should be accepted in a capture — no type constraint error
-        assert_no_errors("let count: int = 42\n@prompt sys ```\n#{count}\n```\n");
+        assert_no_errors("let count: int = 42\n@prompt sys <<EOF\n#{count}\nEOF\n");
     }
 
     // ── @tool annotation tests ──
