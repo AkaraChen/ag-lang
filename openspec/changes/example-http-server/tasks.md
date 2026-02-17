@@ -13,19 +13,19 @@
 
 ## 3. 运行时端点测试
 
-- [ ] 3.1 测试 `GET /`：返回 200 + server info JSON（name、version、endpoints 数组）
-- [ ] 3.2 测试 `POST /echo`：发送 JSON 对象，验证原样返回
-- [ ] 3.3 测试 `POST /echo`：发送 JSON 数组，验证原样返回
-- [ ] 3.4 测试 `POST /calc` add：`{ op: "add", a: 10, b: 3 }` → `result: 13`
-- [ ] 3.5 测试 `POST /calc` subtract：`{ op: "subtract", a: 10, b: 3 }` → `result: 7`
-- [ ] 3.6 测试 `POST /calc` multiply：`{ op: "multiply", a: 4, b: 5 }` → `result: 20`
-- [ ] 3.7 测试 `POST /calc` divide：`{ op: "divide", a: 15, b: 4 }` → `result: 3.75`
-- [ ] 3.8 测试 `POST /calc` divide by zero：`{ op: "divide", a: 10, b: 0 }` → `result: 0`
-- [ ] 3.9 测试 `POST /calc` unknown op：`{ op: "modulo", a: 10, b: 3 }` → `result: 0`
-- [ ] 3.10 测试 `GET /greet/Alice` → `{ message: "Hello, Alice!" }`
-- [ ] 3.11 测试 `GET /greet/World` → `{ message: "Hello, World!" }`
+- [x] 3.1 测试 `GET /`：返回 200 + server info JSON（name、version、endpoints 数组）
+- [x] 3.2 测试 `POST /echo`：发送 JSON 对象，验证原样返回
+- [x] 3.3 测试 `POST /echo`：发送 JSON 数组，验证原样返回
+- [x] 3.4 测试 `POST /calc` add：`{ op: "add", a: 10, b: 3 }` → `result: 13`
+- [x] 3.5 测试 `POST /calc` subtract：`{ op: "subtract", a: 10, b: 3 }` → `result: 7`
+- [x] 3.6 测试 `POST /calc` multiply：`{ op: "multiply", a: 4, b: 5 }` → `result: 20`
+- [x] 3.7 测试 `POST /calc` divide：`{ op: "divide", a: 15, b: 4 }` → `result: 3.75`
+- [x] 3.8 测试 `POST /calc` divide by zero：`{ op: "divide", a: 10, b: 0 }` → `result: 0`
+- [x] 3.9 测试 `POST /calc` unknown op：`{ op: "modulo", a: 10, b: 3 }` → `result: 0`
+- [x] 3.10 测试 `GET /greet/Alice` → `{ message: "Hello, Alice!" }`
+- [x] 3.11 测试 `GET /greet/World` → `{ message: "Hello, World!" }`
 
 ## 4. CLI 集成验证
 
-- [ ] 4.1 验证 `npx @agentscript/serve examples/http-server/app.ag` 可一键启动
-- [ ] 4.2 验证启动后 server 响应 `GET /` 正确
+- [x] 4.1 验证 `agentscript-serve examples/http-server/app.ag` 可一键启动
+- [x] 4.2 验证启动后 server 响应 `GET /` 正确

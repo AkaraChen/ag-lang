@@ -43,18 +43,35 @@ function compile() {
   }
 }
 
+function resolveApp(mod) {
+  // 1. default export is an App instance
+  if (mod.default && typeof mod.default.fetch === "function") {
+    return mod.default;
+  }
+  // 2. named setup() function that returns App
+  if (typeof mod.setup === "function") {
+    return mod.setup();
+  }
+  // 3. default export is a factory function
+  if (typeof mod.default === "function") {
+    return mod.default();
+  }
+  return null;
+}
+
 async function loadAndServe() {
   const fullPath = resolve(outputFile);
   // Bust module cache for dev mode reloads
   const modulePath = `file://${fullPath}?t=${Date.now()}`;
   const mod = await import(modulePath);
+  const app = resolveApp(mod);
 
-  if (!mod.default || typeof mod.default.fetch !== "function") {
-    console.error("Error: No App instance found as default export");
+  if (!app || typeof app.fetch !== "function") {
+    console.error("Error: No App found. Export a setup() function or default App instance.");
     process.exit(1);
   }
 
-  return serve(mod.default, { port });
+  return serve(app, { port });
 }
 
 // Initial compile + start
