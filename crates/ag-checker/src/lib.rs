@@ -96,26 +96,73 @@ impl Scope {
     }
 }
 
-// ── Checker ────────────────────────────────────────────────
+// ── Type → JsonSchema conversion ──────────────────────────
 
-/// Metadata about a registered @tool function.
-#[derive(Debug, Clone)]
-pub struct ToolInfo {
-    pub description: Option<String>,
-    pub param_types: Vec<(String, Type)>,
+pub fn type_to_json_schema(ty: &Type) -> JsonSchema {
+    match ty {
+        Type::Str => JsonSchema::String,
+        Type::Num => JsonSchema::Number,
+        Type::Int => JsonSchema::Integer,
+        Type::Bool => JsonSchema::Boolean,
+        Type::Nil => JsonSchema::Null,
+        Type::Any | Type::Unknown => JsonSchema::Any,
+        Type::Array(inner) => JsonSchema::Array(Box::new(type_to_json_schema(inner))),
+        Type::Map(_key, value) => JsonSchema::Object {
+            properties: vec![],
+            required: vec![],
+            additional_properties: Some(Box::new(type_to_json_schema(value))),
+        },
+        Type::Nullable(inner) => type_to_json_schema(inner),
+        Type::Union(a, b) => {
+            let mut schemas = Vec::new();
+            collect_union_json_schemas(a, &mut schemas);
+            collect_union_json_schemas(b, &mut schemas);
+            JsonSchema::AnyOf(schemas)
+        }
+        Type::Struct(_, fields) => {
+            let properties: Vec<(std::string::String, JsonSchema)> = fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), type_to_json_schema(ty)))
+                .collect();
+            let required: Vec<std::string::String> = fields
+                .iter()
+                .filter(|(_, ty)| !matches!(ty, Type::Nullable(_)))
+                .map(|(name, _)| name.clone())
+                .collect();
+            JsonSchema::Object {
+                properties,
+                required,
+                additional_properties: None,
+            }
+        }
+        Type::Promise(inner) => type_to_json_schema(inner),
+        Type::Function(_, _) | Type::VariadicFunction(_, _) | Type::Enum(_, _) => JsonSchema::Any,
+    }
 }
+
+fn collect_union_json_schemas(ty: &Type, out: &mut Vec<JsonSchema>) {
+    match ty {
+        Type::Union(a, b) => {
+            collect_union_json_schemas(a, out);
+            collect_union_json_schemas(b, out);
+        }
+        _ => out.push(type_to_json_schema(ty)),
+    }
+}
+
+// ── Checker ────────────────────────────────────────────────
 
 pub struct Checker {
     scope: Scope,
     pub diagnostics: Vec<Diagnostic>,
     type_aliases: HashMap<String, Type>,
-    pub tool_registry: HashMap<String, ToolInfo>,
+    pub tool_registry: HashMap<String, ToolSchemaInfo>,
     in_async: bool,
 }
 
 pub struct CheckResult {
     pub diagnostics: Vec<Diagnostic>,
-    pub tool_registry: HashMap<String, ToolInfo>,
+    pub tool_registry: HashMap<String, ToolSchemaInfo>,
 }
 
 pub fn check(module: &Module) -> CheckResult {
@@ -673,11 +720,17 @@ impl Checker {
                 }
             }
 
+            // Convert Type → JsonSchema for the tool schema info
+            let params: Vec<(String, JsonSchema)> = param_types
+                .iter()
+                .map(|(name, ty)| (name.clone(), type_to_json_schema(ty)))
+                .collect();
+
             self.tool_registry.insert(
                 f.name.clone(),
-                ToolInfo {
+                ToolSchemaInfo {
                     description: ann.description.clone(),
-                    param_types,
+                    params,
                 },
             );
         }
@@ -1382,8 +1435,9 @@ mod tests {
         assert!(result.tool_registry.contains_key("search"));
         let info = &result.tool_registry["search"];
         assert_eq!(info.description.as_deref(), Some("search the web"));
-        assert_eq!(info.param_types.len(), 1);
-        assert_eq!(info.param_types[0].0, "query");
+        assert_eq!(info.params.len(), 1);
+        assert_eq!(info.params[0].0, "query");
+        assert_eq!(info.params[0].1, JsonSchema::String);
     }
 
     #[test]
@@ -1512,6 +1566,105 @@ mod tests {
     fn skill_type_alias_passes() {
         assert_no_errors(
             "type ID = str\n@skill s <<EOF\n@description \"test\"\n@input { id: ID }\n@steps\ndo thing\nEOF\n",
+        );
+    }
+
+    // ── type_to_json_schema tests ──
+
+    #[test]
+    fn json_schema_primitives() {
+        assert_eq!(type_to_json_schema(&Type::Str), JsonSchema::String);
+        assert_eq!(type_to_json_schema(&Type::Num), JsonSchema::Number);
+        assert_eq!(type_to_json_schema(&Type::Int), JsonSchema::Integer);
+        assert_eq!(type_to_json_schema(&Type::Bool), JsonSchema::Boolean);
+        assert_eq!(type_to_json_schema(&Type::Nil), JsonSchema::Null);
+    }
+
+    #[test]
+    fn json_schema_any() {
+        assert_eq!(type_to_json_schema(&Type::Any), JsonSchema::Any);
+        assert_eq!(type_to_json_schema(&Type::Unknown), JsonSchema::Any);
+    }
+
+    #[test]
+    fn json_schema_array() {
+        assert_eq!(
+            type_to_json_schema(&Type::Array(Box::new(Type::Str))),
+            JsonSchema::Array(Box::new(JsonSchema::String)),
+        );
+    }
+
+    #[test]
+    fn json_schema_map() {
+        let schema = type_to_json_schema(&Type::Map(Box::new(Type::Str), Box::new(Type::Num)));
+        assert_eq!(schema, JsonSchema::Object {
+            properties: vec![],
+            required: vec![],
+            additional_properties: Some(Box::new(JsonSchema::Number)),
+        });
+    }
+
+    #[test]
+    fn json_schema_struct() {
+        let ty = Type::Struct("Foo".into(), vec![
+            ("name".into(), Type::Str),
+            ("age".into(), Type::Int),
+        ]);
+        assert_eq!(type_to_json_schema(&ty), JsonSchema::Object {
+            properties: vec![
+                ("name".into(), JsonSchema::String),
+                ("age".into(), JsonSchema::Integer),
+            ],
+            required: vec!["name".into(), "age".into()],
+            additional_properties: None,
+        });
+    }
+
+    #[test]
+    fn json_schema_struct_nullable_excluded_from_required() {
+        let ty = Type::Struct("Bar".into(), vec![
+            ("required_field".into(), Type::Str),
+            ("optional_field".into(), Type::Nullable(Box::new(Type::Str))),
+        ]);
+        let schema = type_to_json_schema(&ty);
+        if let JsonSchema::Object { required, .. } = &schema {
+            assert!(required.contains(&"required_field".to_string()));
+            assert!(!required.contains(&"optional_field".to_string()));
+        } else {
+            panic!("expected Object schema");
+        }
+    }
+
+    #[test]
+    fn json_schema_union() {
+        let ty = Type::Union(Box::new(Type::Str), Box::new(Type::Num));
+        assert_eq!(
+            type_to_json_schema(&ty),
+            JsonSchema::AnyOf(vec![JsonSchema::String, JsonSchema::Number]),
+        );
+    }
+
+    #[test]
+    fn json_schema_nullable() {
+        // Nullable strips the wrapper, optionality handled at schema level
+        assert_eq!(
+            type_to_json_schema(&Type::Nullable(Box::new(Type::Int))),
+            JsonSchema::Integer,
+        );
+    }
+
+    #[test]
+    fn json_schema_non_serializable_fn() {
+        let ty = Type::Function(vec![Type::Int], Box::new(Type::Int));
+        assert_eq!(type_to_json_schema(&ty), JsonSchema::Any);
+    }
+
+    #[test]
+    fn json_schema_promise() {
+        // Promise unwraps to inner type
+        assert_eq!(
+            type_to_json_schema(&Type::Promise(Box::new(Type::Str))),
+            JsonSchema::String,
         );
     }
 }

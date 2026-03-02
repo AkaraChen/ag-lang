@@ -4,7 +4,6 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use ag_ast::*;
-use ag_checker::ToolInfo;
 use ag_dsl_core::swc_helpers::{ident, binding_ident, expr_or_spread};
 use swc_common::sync::Lrc;
 use swc_common::{SourceMap, SyntaxContext, DUMMY_SP};
@@ -84,7 +83,7 @@ fn convert_dsl_block(dsl: &ag_ast::DslBlock) -> ag_dsl_core::DslBlock {
 
 pub struct Translator {
     handlers: HashMap<String, Box<dyn ag_dsl_core::DslHandler>>,
-    tool_registry: HashMap<String, ToolInfo>,
+    tool_registry: HashMap<String, ToolSchemaInfo>,
 }
 
 impl Translator {
@@ -95,7 +94,7 @@ impl Translator {
         }
     }
 
-    pub fn set_tool_registry(&mut self, registry: HashMap<String, ToolInfo>) {
+    pub fn set_tool_registry(&mut self, registry: HashMap<String, ToolSchemaInfo>) {
         self.tool_registry = registry;
     }
 
@@ -347,7 +346,7 @@ pub fn codegen(module: &Module) -> String {
     })
 }
 
-pub fn codegen_with_tools(module: &Module, tool_registry: HashMap<String, ToolInfo>) -> String {
+pub fn codegen_with_tools(module: &Module, tool_registry: HashMap<String, ToolSchemaInfo>) -> String {
     let mut translator = Translator::new();
     translator.set_tool_registry(tool_registry);
     translator.register_dsl_handler(
@@ -390,7 +389,7 @@ fn stmt_to_module_item(stmt: swc::Stmt) -> swc::ModuleItem {
 
 // ── Module translation ─────────────────────────────────────
 
-fn translate_item_into(item: &Item, body: &mut Vec<swc::ModuleItem>, tool_registry: &HashMap<String, ToolInfo>) {
+fn translate_item_into(item: &Item, body: &mut Vec<swc::ModuleItem>, tool_registry: &HashMap<String, ToolSchemaInfo>) {
     match item {
         Item::FnDecl(f) => {
             if f.is_pub {
@@ -411,7 +410,7 @@ fn translate_item_into(item: &Item, body: &mut Vec<swc::ModuleItem>, tool_regist
                     let schema_expr = tool_schema::build_tool_schema(
                         &f.name,
                         &info.description,
-                        &info.param_types,
+                        &info.params,
                     );
                     // fnName.schema = { ... }
                     body.push(stmt_to_module_item(swc::Stmt::Expr(swc::ExprStmt {

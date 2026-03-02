@@ -558,6 +558,35 @@ pub enum AssignOp {
     DivAssign,
 }
 
+// ── Tool Schema IR ─────────────────────────────────────────
+
+/// JSON Schema intermediate representation for passing tool type
+/// information from checker to codegen without a direct dependency.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsonSchema {
+    String,
+    Number,
+    Integer,
+    Boolean,
+    Null,
+    Any,
+    Array(Box<JsonSchema>),
+    Object {
+        properties: Vec<(std::string::String, JsonSchema)>,
+        required: Vec<std::string::String>,
+        additional_properties: Option<Box<JsonSchema>>,
+    },
+    AnyOf(Vec<JsonSchema>),
+}
+
+/// Metadata about a registered @tool function, using JsonSchema
+/// instead of checker Type for decoupled codegen.
+#[derive(Debug, Clone)]
+pub struct ToolSchemaInfo {
+    pub description: Option<std::string::String>,
+    pub params: Vec<(std::string::String, JsonSchema)>,
+}
+
 // ── Diagnostic ─────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
