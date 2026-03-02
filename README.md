@@ -1,87 +1,99 @@
 # AgentScript
 
-A purpose-built programming language for authoring AI agents. AgentScript has a JS-flavored syntax with first-class DSL blocks for prompts, agents, skills, UI components, and HTTP servers; annotations for tool metadata and JS interop; and compiles to Node.js JavaScript.
+> This project is under heavy construction.
 
-## Quick Start
+**A programming language designed for AI agents.**
 
-```bash
-# Build the compiler
-cargo build --workspace
+[中文版本](./README.CN.md)
 
-# Compile an AgentScript file to JavaScript
-cargo run -p ag-cli -- build examples/simple-agent/app.ag
+---
 
-# Type-check without compiling
-cargo run -p ag-cli -- check examples/simple-agent/app.ag
+## Why AgentScript?
+
+Building AI agents today means wrestling with SDKs that were never meant for the job. You piece together prompt templates, tool definitions, and runtime glue — then debug the inevitable mismatches between them.
+
+**AgentScript is built on a simple idea: AI agents deserve their own language.**
+
+Not another framework. Not another SDK. A language where prompts, tools, agents, and servers are first-class citizens — not strings in a config file or objects in a class hierarchy.
+
+## The Philosophy
+
+### Prompts as Values
+
+`@prompt` blocks make LLM messages real code — version-controlled, type-checked, composable. No more string interpolation nightmares. Captures like `#{user.name}` are expressions, not template variables.
+
+### Tools with Guarantees
+
+The `@tool` annotation turns functions into LLM-callable tools with auto-generated JSON schemas. The compiler checks that your parameters are serializable. No runtime surprises when the model calls your function with the wrong shape.
+
+### Agents as Architecture
+
+`@agent` blocks declare autonomous actors with model selection, tool bindings, and lifecycle hooks. Multi-agent teams compose naturally — no orchestration framework needed.
+
+### Components as Output
+
+`@component` blocks emit React components. Agents return rich UI, not just text. The language treats presentation as a first-class concern.
+
+## What You Can Do
+
+**Define Tools**
+```ag
+@tool("Search documentation")
+fn search_docs(query: str, limit: int = 5) -> [Result] { ... }
 ```
+The compiler generates the JSON schema. You write functions, not specifications.
 
-## Language Overview
-
-````javascript
-// Tools — annotated functions that agents can invoke
-@tool("Look up documentation for a topic")
-fn lookup_docs(topic: str) -> str {
-    `Documentation for: ${topic}`
-}
-
-// Prompts — first-class DSL blocks for LLM messages
-@prompt system_prompt <<EOF
+**Author Prompts**
+```ag
+@prompt system <<EOF
 @role system
-You are a helpful coding assistant.
-You specialize in TypeScript and Rust programming.
+You are a helpful assistant specializing in #{domain}.
 EOF
-
-// Pattern matching, pipe operator
-fn process(input: str) -> str {
-    input |> classify |> format_result
-}
-
-fn classify(q: str) -> str {
-    match q {
-        "math" => "calculation",
-        "docs" => "documentation",
-        _ => "general",
-    }
-}
-````
-
-See `spec/lang.md` for the full language specification and `examples/` for working code.
-
-## Language Features
-
-- **JS-flavored syntax** — `fn`, `let`, `mut`, `match`, `|>` pipe, `?.` optional chain, `??` nullish coalesce
-- **DSL blocks** — `@prompt`, `@agent`, `@skill`, `@component`, `@server` with `#{ expr }` captures
-- **Annotations** — `@tool` marks functions as LLM-callable tools, `@js("module")` binds to JavaScript
-- **Extern declarations** — type-safe bindings to JavaScript functions, structs, and types
-- **Structural typing** — basic type inference, union types, nullable types
-- **Standard library** — Web APIs (`std:web/fetch`), HTTP server/client, filesystem, logging
-
-## Project Structure
-
 ```
-crates/
-  ag-ast/          # AST node types shared across all crates
-  ag-lexer/        # Tokenizer with DSL raw mode
-  ag-parser/       # Recursive descent parser (LL(1))
-  ag-checker/      # Type checker (structural typing, basic inference)
-  ag-codegen/      # JavaScript codegen via SWC
-  ag-cli/          # CLI: `asc build` and `asc check`
-  ag-stdlib/       # Standard library module resolver
-  ag-dsl-core/     # DslHandler trait and CodegenContext trait
-  ag-dsl-prompt/   # @prompt DSL (complete: parse + codegen)
-  ag-dsl-agent/    # @agent DSL (parse only)
-  ag-dsl-skill/    # @skill DSL (parse only)
-  ag-dsl-server/   # @server DSL (parse only)
-  ag-dsl-component/# @component DSL (parse only)
-spec/
-  lang.md          # Language specification v0.2
-examples/
-  simple-agent/    # Prompts, tools, match, pipe
-  http-server/     # HTTP routes, handlers, JSON
-```
+Type-checked captures, directive parsing, template composition — all in one block.
 
-## Tests
+**Build Agents**
+```ag
+@agent Coder <<EOF
+@model claude-sonnet | gpt-4o
+@tools #{[read_file, write_file, run_tests]}
 
-```bash
-cargo test --workspace   # 315 tests across all crates
+You are an expert software engineer.
+EOF
 ```
+Model fallbacks, tool bindings, system prompts — declarative and version-controlled.
+
+**Create UI**
+```ag
+@component DiffView <<EOF
+@props { original: str, modified: str }
+@render <Diff ... />
+EOF
+```
+Agents that return components, not just text strings.
+
+**Serve HTTP**
+```ag
+@server app <<EOF
+@port 3000
+@post /chat #{fn(c) { c.json(await agent.send(c.body)) }}
+EOF
+```
+One block, running server.
+
+## Who It's For
+
+AgentScript is for developers building AI agents who:
+
+- Are tired of string-based prompt engineering
+- Want compile-time guarantees for tool schemas
+- Build multi-agent systems and need architectural clarity
+- Believe AI deserves better than Python SDKs designed for data science
+
+## The Vision
+
+A world where building an AI agent feels like writing a program — because it is one. Where prompts, tools, and agents are syntactic constructs with editor support, type systems, and compilation targets. Where the gap between "what I want the agent to do" and "code that makes it happen" is measured in lines, not frameworks.
+
+---
+
+*Compiles to Node.js. Written in Rust. Inspired by the belief that AI agents are a new kind of software, and they deserve a new kind of language.*
